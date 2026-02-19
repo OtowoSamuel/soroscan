@@ -7,13 +7,57 @@ import logging
 from datetime import datetime
 from typing import Any
 
+import jsonschema
 import requests
 from celery import shared_task
 from django.utils import timezone
 
-from .models import ContractEvent, TrackedContract, WebhookSubscription, IndexerState
+from .models import ContractEvent, EventSchema, TrackedContract, WebhookSubscription, IndexerState
 
 logger = logging.getLogger(__name__)
+
+
+def validate_event_payload(
+    contract: TrackedContract,
+    event_type: str,
+    payload: dict[str, Any],
+    ledger: int | None = None,
+) -> tuple[bool, int | None]:
+    """
+    Validate event payload against the latest EventSchema for this contract+event_type.
+
+    Returns:
+        (passed, version_used): passed is True if no schema exists or validation succeeded;
+        version_used is the EventSchema.version used, or None if no schema.
+    """
+    if payload is None or not isinstance(payload, dict):
+        return (True, None)
+    schema = (
+        EventSchema.objects.filter(
+            contract=contract,
+            event_type=event_type,
+        )
+        .order_by("-version")
+        .first()
+    )
+    if schema is None:
+        return (True, None)
+    try:
+        jsonschema.validate(instance=payload, schema=schema.json_schema)
+        return (True, schema.version)
+    except jsonschema.ValidationError:
+        logger.warning(
+            "Event payload schema validation failed for contract_id=%s event_type=%s ledger=%s",
+            contract.contract_id,
+            event_type,
+            ledger,
+            extra={
+                "contract_id": contract.contract_id,
+                "event_type": event_type,
+                "ledger": ledger,
+            },
+        )
+        return (False, schema.version)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -167,18 +211,35 @@ def sync_events_from_horizon() -> int:
             except TrackedContract.DoesNotExist:
                 continue
 
-            # Create event record
+            payload = event.value  # Decoded payload
+            passed, version_used = validate_event_payload(
+                contract, event.type, payload, ledger=event.ledger
+            )
+            validation_status = "passed" if passed else "failed"
+            schema_version = version_used
+
+            # Create or get event record
             event_record, created = ContractEvent.objects.get_or_create(
                 tx_hash=event.tx_hash,
                 ledger=event.ledger,
                 event_type=event.type,
                 defaults={
                     "contract": contract,
-                    "payload": event.value,  # Decoded payload
+                    "payload": payload,
                     "timestamp": timezone.now(),  # Should parse from ledger
                     "raw_xdr": event.xdr if hasattr(event, "xdr") else "",
+                    "validation_status": validation_status,
+                    "schema_version": schema_version,
                 },
             )
+            if not created:
+                if (
+                    event_record.validation_status != validation_status
+                    or event_record.schema_version != schema_version
+                ):
+                    event_record.validation_status = validation_status
+                    event_record.schema_version = schema_version
+                    event_record.save(update_fields=["validation_status", "schema_version"])
 
             if created:
                 new_events += 1

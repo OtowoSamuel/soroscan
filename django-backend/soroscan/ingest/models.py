@@ -48,6 +48,37 @@ class TrackedContract(models.Model):
         return f"{self.name} ({self.contract_id[:8]}...)"
 
 
+class EventSchema(models.Model):
+    """
+    Versioned JSON schema for contract event types (issue #17).
+    """
+
+    contract = models.ForeignKey(
+        TrackedContract,
+        on_delete=models.CASCADE,
+        related_name="event_schemas",
+        help_text="Contract this schema applies to",
+    )
+    version = models.PositiveIntegerField(help_text="Schema version number")
+    event_type = models.CharField(
+        max_length=128,
+        help_text="Event type/name this schema describes",
+    )
+    json_schema = models.JSONField(help_text="JSON Schema for validating event payloads")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["contract", "version", "event_type"],
+                name="ingest_eventschema_contract_version_event_type_uniq",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.event_type} v{self.version} ({self.contract.name})"
+
+
 class ContractEvent(models.Model):
     """
     Individual events emitted by tracked contracts.
@@ -63,6 +94,21 @@ class ContractEvent(models.Model):
         max_length=100,
         db_index=True,
         help_text="Event type/name (e.g., 'swap', 'transfer')",
+    )
+    schema_version = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="EventSchema version used for validation (if any)",
+    )
+    validation_status = models.CharField(
+        max_length=32,
+        choices=[
+            ("passed", "Passed"),
+            ("failed", "Failed"),
+        ],
+        default="passed",
+        db_index=True,
+        help_text="Result of schema validation",
     )
     payload = models.JSONField(help_text="Decoded event payload")
     payload_hash = models.CharField(
