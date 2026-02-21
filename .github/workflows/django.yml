@@ -1,0 +1,98 @@
+name: Django Backend CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'django-backend/**'
+      - '.github/workflows/django.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'django-backend/**'
+      - '.github/workflows/django.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: soroscan_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'django-backend/requirements.txt'
+      
+      - name: Install dependencies
+        working-directory: ./django-backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run migrations
+        working-directory: ./django-backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/soroscan_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci
+          DEBUG: 'False'
+          DJANGO_SETTINGS_MODULE: soroscan.settings_test
+        run: |
+          python manage.py migrate --noinput
+      
+      - name: Run tests
+        working-directory: ./django-backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/soroscan_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci
+          DEBUG: 'False'
+          DJANGO_SETTINGS_MODULE: soroscan.settings_test
+        run: |
+          python manage.py test
+      
+      - name: Run pytest with coverage
+        working-directory: ./django-backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/soroscan_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci
+          DEBUG: 'False'
+          DJANGO_SETTINGS_MODULE: soroscan.settings_test
+        run: |
+          pytest --cov=soroscan --cov-report=xml --cov-report=term
+      
+      - name: Lint with ruff
+        working-directory: ./django-backend
+        run: |
+          ruff check .
+        # Continue on error to report all issues
+        continue-on-error: false
