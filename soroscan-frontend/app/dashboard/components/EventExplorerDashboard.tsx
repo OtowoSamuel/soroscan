@@ -8,6 +8,7 @@ import { PaginationControls } from "./PaginationControls";
 import { fetchAllContracts, fetchExplorerEvents } from "@/components/ingest/graphql";
 import type { EventRecord } from "@/components/ingest/types";
 import styles from "@/components/ingest/ingest-terminal.module.css";
+import { useToast } from "@/context/ToastContext";
 
 const PAGE_SIZE = 20;
 
@@ -20,6 +21,7 @@ interface Filters {
 }
 
 export function EventExplorerDashboard() {
+  const { showToast } = useToast();
   const [contracts, setContracts] = useState<Array<{ contractId: string; name: string }>>([]);
   const [filters, setFilters] = useState<Filters>({
     contractId: "",
@@ -120,44 +122,60 @@ export function EventExplorerDashboard() {
     setCurrentPage(1);
   }, []);
 
-  const handleExport = useCallback((format: "csv" | "json") => {
-    const dataToExport = filteredEvents;
-    
-    if (format === "json") {
-      const blob = new Blob([JSON.stringify(dataToExport, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `events-${Date.now()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } else {
-      const headers = ["Contract ID", "Event Type", "Ledger", "Timestamp", "Transaction", "Payload"];
-      const rows = dataToExport.map((event) => [
-        event.contractId,
-        event.eventType,
-        event.ledger.toString(),
-        event.timestamp,
-        event.txHash,
-        JSON.stringify(event.payload),
-      ]);
-      
-      const csv = [
-        headers.join(","),
-        ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
-      ].join("\n");
-      
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `events-${Date.now()}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-  }, [filteredEvents]);
+  const handleExport = useCallback(
+    (format: "csv" | "json") => {
+      const dataToExport = filteredEvents;
+
+      if (!dataToExport.length) {
+        showToast("No events available to export.", "warning");
+        return;
+      }
+
+      try {
+        if (format === "json") {
+          const blob = new Blob([JSON.stringify(dataToExport, null, 2)], {
+            type: "application/json",
+          });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `events-${Date.now()}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+        } else {
+          const headers = ["Contract ID", "Event Type", "Ledger", "Timestamp", "Transaction", "Payload"];
+          const rows = dataToExport.map((event) => [
+            event.contractId,
+            event.eventType,
+            event.ledger.toString(),
+            event.timestamp,
+            event.txHash,
+            JSON.stringify(event.payload),
+          ]);
+
+          const csv = [
+            headers.join(","),
+            ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
+          ].join("\n");
+
+          const blob = new Blob([csv], { type: "text/csv" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `events-${Date.now()}.csv`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+
+        showToast("Event export started.", "success");
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to export events:", error);
+        showToast("Failed to export events.", "error");
+      }
+    },
+    [filteredEvents, showToast],
+  );
 
   const startIndex = (currentPage - 1) * PAGE_SIZE + 1;
   const endIndex = startIndex + filteredEvents.length - 1;
