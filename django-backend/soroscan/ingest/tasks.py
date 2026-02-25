@@ -8,7 +8,7 @@ import io
 import json
 import logging
 import pstats
-import time as _time
+import time
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import Any
 
@@ -37,7 +37,7 @@ _task_profilers: dict[str, tuple] = {}
 def _start_task_profiling(task_id: str, task, **kwargs) -> None:
     profiler = cProfile.Profile()
     profiler.enable()
-    _task_profilers[task_id] = (profiler, _time.monotonic())
+    _task_profilers[task_id] = (profiler, time.monotonic())
 
 
 @task_postrun.connect
@@ -47,7 +47,7 @@ def _stop_task_profiling(task_id: str, task, **kwargs) -> None:
         return
     profiler, start = entry
     profiler.disable()
-    elapsed = _time.monotonic() - start
+    elapsed = time.monotonic() - start
     if elapsed > _SLOW_TASK_THRESHOLD_S:
         stream = io.StringIO()
         pstats.Stats(profiler, stream=stream).sort_stats(pstats.SortKey.CUMULATIVE).print_stats(20)
@@ -708,6 +708,11 @@ def backfill_contract_events(
             end_ledger,
         )
         raise self.retry(exc=exc)
+    finally:
+        # Always record duration, even if an exception occurred.
+        m.task_duration_seconds.labels(
+            task_name="backfill_contract_events"
+        ).observe(time.monotonic() - _start)
 
 
 # ---------------------------------------------------------------------------
@@ -950,8 +955,3 @@ def cleanup_silk_data() -> int:
         extra={},
     )
     return deleted_count
-    finally:
-        # Always record duration, even if an exception occurred.
-        m.task_duration_seconds.labels(
-            task_name="backfill_contract_events"
-        ).observe(time.monotonic() - _start)

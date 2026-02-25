@@ -8,6 +8,7 @@ import logging
 
 from django.conf import settings
 from django.db.models import Count, Max
+from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend

@@ -1,0 +1,15 @@
+[run]
+omit =
+    soroscan/settings.py
+    soroscan/settings_test.py
+    soroscan/wsgi.py
+    soroscan/asgi.py
+    soroscan/ingest/migrations/*
+
+[report]
+omit =
+    soroscan/settings.py
+    soroscan/settings_test.py
+    soroscan/wsgi.py
+    soroscan/asgi.py
+    soroscan/ingest/migrations/*
