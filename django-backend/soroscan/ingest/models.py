@@ -282,3 +282,175 @@ class IndexerState(models.Model):
 
     def __str__(self):
         return f"{self.key}: {self.value}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #X: Tiered rate limiting with per-API-key and per-contract quotas
+# ---------------------------------------------------------------------------
+
+class APIKey(models.Model):
+    """
+    API key model with tiered rate limiting.
+    Keys are at least 32 characters and randomly generated.
+    """
+
+    class Tier(models.TextChoices):
+        FREE = "free", "Free"
+        PRO = "pro", "Pro"
+        ENTERPRISE = "enterprise", "Enterprise"
+
+    TIER_QUOTAS: dict = {
+        "free": 50,
+        "pro": 5000,
+        "enterprise": None,  # unlimited — stored as large int
+    }
+    UNLIMITED_QUOTA = 10_000_000
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="api_keys",
+    )
+    name = models.CharField(max_length=128)
+    key = models.CharField(max_length=64, unique=True, db_index=True)
+    tier = models.CharField(
+        max_length=16,
+        choices=Tier.choices,
+        default=Tier.FREE,
+    )
+    quota_per_hour = models.IntegerField(
+        help_text="Max requests per hour. Auto-set from tier on creation.",
+    )
+    is_active = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if not self.key:
+            # At least 32 chars, URL-safe random token
+            self.key = secrets.token_urlsafe(48)[:64]
+        if not self.quota_per_hour:
+            quota = self.TIER_QUOTAS.get(self.tier, 50)
+            self.quota_per_hour = quota if quota is not None else self.UNLIMITED_QUOTA
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.name} [{self.tier}] ({self.user})"
+
+
+class ContractQuota(models.Model):
+    """
+    Per-contract rate limit override for a specific APIKey.
+    Cannot exceed the key's tier limit.
+    """
+
+    contract = models.ForeignKey(
+        TrackedContract,
+        on_delete=models.CASCADE,
+        related_name="contract_quotas",
+    )
+    api_key = models.ForeignKey(
+        APIKey,
+        on_delete=models.CASCADE,
+        related_name="contract_quotas",
+    )
+    quota_per_hour = models.IntegerField(
+        help_text="Custom requests-per-hour for this contract. Cannot exceed the key tier limit.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("contract", "api_key")
+        ordering = ["-created_at"]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if (
+            self.api_key.tier != APIKey.Tier.ENTERPRISE
+            and self.quota_per_hour > self.api_key.quota_per_hour
+        ):
+            raise ValidationError(
+                "Contract quota_per_hour cannot exceed the API key's tier limit "
+                f"({self.api_key.quota_per_hour}/hr)."
+            )
+
+    def __str__(self):
+        return f"{self.api_key.name} / {self.contract.name}: {self.quota_per_hour}/hr"
+
+
+# ---------------------------------------------------------------------------
+# Issue #X: Event-driven alerts with rule engine and notifications
+# ---------------------------------------------------------------------------
+
+class AlertRule(models.Model):
+    """
+    Alert rule attached to a contract with a JSON condition AST.
+    Supports AND / OR / NOT logic with field comparisons.
+    """
+
+    MAX_RULES_PER_CONTRACT = 100
+
+    contract = models.ForeignKey(
+        TrackedContract,
+        on_delete=models.CASCADE,
+        related_name="alert_rules",
+    )
+    name = models.CharField(max_length=256)
+    condition = models.JSONField(
+        help_text="Condition AST: {'op': 'and', 'conditions': [...]}"
+    )
+    action_type = models.CharField(
+        max_length=16,
+        choices=[
+            ("slack", "Slack"),
+            ("email", "Email"),
+            ("webhook", "Webhook"),
+        ],
+    )
+    action_target = models.TextField(
+        help_text="Slack channel, email address, or webhook URL"
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} ({self.contract.name})"
+
+
+class AlertExecution(models.Model):
+    """
+    Immutable record of each rule trigger attempt (sent / failed).
+    """
+
+    rule = models.ForeignKey(
+        AlertRule,
+        on_delete=models.CASCADE,
+        related_name="executions",
+    )
+    event = models.ForeignKey(
+        ContractEvent,
+        on_delete=models.CASCADE,
+        related_name="alert_executions",
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=[("sent", "Sent"), ("failed", "Failed")],
+    )
+    response = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["rule", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Alert {self.rule.name}: {self.status} @ {self.created_at}"

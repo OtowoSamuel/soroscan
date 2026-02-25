@@ -5,9 +5,22 @@ from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin.helpers import ActionForm
 from django.db.models import Count
+from django.http import HttpResponse
+from django.urls import path
 from django.utils.html import format_html
 
-from .models import ContractEvent, IndexerState, TrackedContract, WebhookDeliveryLog, WebhookSubscription, EventSchema
+from .models import (
+    AlertExecution,
+    AlertRule,
+    APIKey,
+    ContractEvent,
+    ContractQuota,
+    IndexerState,
+    TrackedContract,
+    WebhookDeliveryLog,
+    WebhookSubscription,
+    EventSchema,
+)
 from .tasks import backfill_contract_events
 
 
@@ -197,51 +210,84 @@ class ContractEventAdmin(admin.ModelAdmin):
         Dispatch async Celery task to re-index selected contracts.
         Groups selected events by contract and queues re-indexing tasks.
         """
-        # Get unique contracts from selected events
         contract_ids = set(event.contract.contract_id for event in queryset)
 
         if not contract_ids:
-            self.message_user(
-                request,
-                "No events selected.",
-                level=messages.WARNING,
-            )
+            self.message_user(request, "No events selected.", level=messages.WARNING)
             return
 
         task_ids = []
         for contract_id in contract_ids:
             try:
                 contract = TrackedContract.objects.get(contract_id=contract_id)
-                # Re-index from current last_indexed_ledger onwards
                 from_ledger = (
-                    contract.last_indexed_ledger + 1
-                    if contract.last_indexed_ledger
-                    else 1
+                    contract.last_indexed_ledger + 1 if contract.last_indexed_ledger else 1
                 )
-                # Reasonable end ledger (current + 1000)
                 to_ledger = (contract.last_indexed_ledger or 0) + 1000
-
-                task = backfill_contract_events.delay(
-                    contract_id,
-                    from_ledger,
-                    to_ledger,
-                )
+                task = backfill_contract_events.delay(contract_id, from_ledger, to_ledger)
                 task_ids.append(f"{contract.name}: {task.id}")
             except TrackedContract.DoesNotExist:
                 self.message_user(
-                    request,
-                    f"Contract {contract_id} not found.",
-                    level=messages.ERROR,
+                    request, f"Contract {contract_id} not found.", level=messages.ERROR
                 )
                 continue
 
         if task_ids:
-            task_ids_text = ", ".join(task_ids)
             self.message_user(
                 request,
-                f"Re-index started for {len(task_ids)} contract(s). Task IDs: {task_ids_text}",
+                f"Re-index started for {len(task_ids)} contract(s). Task IDs: {', '.join(task_ids)}",
                 level=messages.SUCCESS,
             )
+
+    # ------------------------------------------------------------------
+    # Slow query report — accessible at /admin/ingest/contractevent/slow-query-report/
+    # ------------------------------------------------------------------
+
+    def get_urls(self):
+        extra = [
+            path(
+                "slow-query-report/",
+                self.admin_site.admin_view(self._slow_query_view),
+                name="ingest_slowqueryreport",
+            ),
+        ]
+        return extra + super().get_urls()
+
+    def _slow_query_view(self, request):
+        """Top-20 slow queries sourced from Django Silk (when enabled)."""
+        try:
+            from silk.models import SQLQuery  # type: ignore[import]
+
+            top_queries = (
+                SQLQuery.objects.values("query")
+                .annotate(freq=Count("id"))
+                .order_by("-freq")[:20]
+            )
+            rows_html = "".join(
+                f"<tr><td>{i + 1}</td><td>{q['freq']}</td>"
+                f"<td><pre style='white-space:pre-wrap;max-width:70ch'>{q['query'][:500]}</pre></td></tr>"
+                for i, q in enumerate(top_queries)
+            )
+            silk_status = "Silk is active — showing top queries by frequency."
+        except ImportError:
+            rows_html = (
+                "<tr><td colspan='3'>Django Silk is not installed or not enabled. "
+                "Set <code>ENABLE_SILK=true</code> to activate profiling.</td></tr>"
+            )
+            silk_status = "Silk is NOT active."
+
+        html = (
+            "<html><head><title>Slow Query Report</title>"
+            "<link rel='stylesheet' type='text/css' href='/static/admin/css/base.css'></head>"
+            "<body id='django-admin'><div id='content-main'>"
+            f"<h1>Top-20 Slow Queries</h1><p><strong>{silk_status}</strong></p>"
+            "<p>You can also check <code>logs/slow_queries.log</code> for queries "
+            "exceeding the configured threshold.</p>"
+            "<table><thead><tr><th>#</th><th>Count</th><th>Query</th></tr></thead>"
+            f"<tbody>{rows_html}</tbody></table>"
+            "</div></body></html>"
+        )
+        return HttpResponse(html)
 
 
 @admin.register(WebhookSubscription)
@@ -372,3 +418,129 @@ class WebhookDeliveryLogAdmin(admin.ModelAdmin):
     @admin.display(description="Success", boolean=True)
     def success_display(self, obj):
         return obj.success
+
+
+# ---------------------------------------------------------------------------
+# Issue: Tiered rate limiting — APIKey and ContractQuota admin
+# ---------------------------------------------------------------------------
+
+@admin.register(APIKey)
+class APIKeyAdmin(admin.ModelAdmin):
+    list_display = [
+        "name",
+        "user",
+        "tier",
+        "quota_per_hour",
+        "is_active",
+        "requests_this_hour",
+        "last_used_at",
+        "created_at",
+    ]
+    list_filter = ["tier", "is_active", "created_at"]
+    search_fields = ["name", "user__username", "user__email"]
+    readonly_fields = ["key", "created_at", "last_used_at"]
+    ordering = ["-created_at"]
+
+    @admin.display(description="Usage (this hour)")
+    def requests_this_hour(self, obj):
+        """Read usage counter from Redis."""
+        import time
+
+        from django.core.cache import cache
+        from soroscan.throttles import _BUCKET_TTL
+
+        bucket_hour = int(time.time()) // _BUCKET_TTL
+        cache_key = f"soroscan_api_key_quota:{obj.id}:{bucket_hour}"
+        count = cache.get(cache_key, 0)
+        if obj.quota_per_hour >= APIKey.UNLIMITED_QUOTA:
+            return f"{count} / ∞"
+        return f"{count} / {obj.quota_per_hour}"
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("user")
+
+    def save_model(self, request, obj, form, change):
+        # Auto-set quota based on tier when saving via admin
+        if not change or "tier" in form.changed_data:
+            quota = APIKey.TIER_QUOTAS.get(obj.tier, 50)
+            obj.quota_per_hour = quota if quota is not None else APIKey.UNLIMITED_QUOTA
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(ContractQuota)
+class ContractQuotaAdmin(admin.ModelAdmin):
+    list_display = ["api_key", "contract", "quota_per_hour", "created_at"]
+    list_filter = ["api_key__tier"]
+    search_fields = ["api_key__name", "contract__name", "contract__contract_id"]
+    readonly_fields = ["created_at"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("api_key", "contract")
+
+
+# ---------------------------------------------------------------------------
+# Issue: Event-driven alerts — AlertRule and AlertExecution admin
+# ---------------------------------------------------------------------------
+
+@admin.register(AlertRule)
+class AlertRuleAdmin(admin.ModelAdmin):
+    list_display = [
+        "name",
+        "contract",
+        "action_type",
+        "action_target_short",
+        "is_active",
+        "execution_count",
+        "created_at",
+    ]
+    list_filter = ["action_type", "is_active", "created_at"]
+    search_fields = ["name", "contract__name", "action_target"]
+    readonly_fields = ["created_at"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("contract")
+            .annotate(_execution_count=Count("executions", distinct=True))
+        )
+
+    @admin.display(description="Target")
+    def action_target_short(self, obj):
+        target = obj.action_target
+        return target[:40] + "…" if len(target) > 40 else target
+
+    @admin.display(description="Executions")
+    def execution_count(self, obj):
+        return getattr(obj, "_execution_count", 0)
+
+
+@admin.register(AlertExecution)
+class AlertExecutionAdmin(admin.ModelAdmin):
+    list_display = ["rule", "event_short", "status_colored", "created_at"]
+    list_filter = ["status", "created_at"]
+    search_fields = ["rule__name"]
+    readonly_fields = ["rule", "event", "status", "response", "created_at"]
+    ordering = ["-created_at"]
+    date_hierarchy = "created_at"
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("rule", "event")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description="Event")
+    def event_short(self, obj):
+        return f"{obj.event.event_type}@{obj.event.ledger}"
+
+    @admin.display(description="Status")
+    def status_colored(self, obj):
+        color = "#28a745" if obj.status == "sent" else "#dc3545"
+        return format_html('<span style="color:{};font-weight:bold">{}</span>', color, obj.status)
+

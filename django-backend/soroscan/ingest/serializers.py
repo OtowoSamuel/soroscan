@@ -3,7 +3,7 @@ DRF Serializers for SoroScan API.
 """
 from rest_framework import serializers
 
-from .models import ContractEvent, TrackedContract, WebhookSubscription
+from .models import APIKey, ContractEvent, TrackedContract, WebhookSubscription
 
 
 class TrackedContractSerializer(serializers.ModelSerializer):
@@ -119,3 +119,60 @@ class RecordEventRequestSerializer(serializers.Serializer):
         max_length=64,
         help_text="SHA-256 hash of payload (hex)",
     )
+
+
+class APIKeySerializer(serializers.ModelSerializer):
+    """
+    Serializer for APIKey model.
+    The ``key`` field is write-once: visible only in the creation response.
+    """
+
+    class Meta:
+        model = APIKey
+        fields = [
+            "id",
+            "name",
+            "key",
+            "tier",
+            "quota_per_hour",
+            "is_active",
+            "last_used_at",
+            "created_at",
+        ]
+        read_only_fields = ["id", "key", "quota_per_hour", "last_used_at", "created_at"]
+        extra_kwargs = {
+            "key": {"read_only": True},
+        }
+
+
+class EventSearchSerializer(serializers.ModelSerializer):
+    """
+    Read-only serializer for event search results.
+    Includes a ``relevance_score`` placeholder for future ranking support.
+    """
+
+    contract_id = serializers.CharField(source="contract.contract_id", read_only=True)
+    contract_name = serializers.CharField(source="contract.name", read_only=True)
+    relevance_score = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ContractEvent
+        fields = [
+            "id",
+            "contract_id",
+            "contract_name",
+            "event_type",
+            "payload",
+            "payload_hash",
+            "ledger",
+            "event_index",
+            "timestamp",
+            "tx_hash",
+            "validation_status",
+            "relevance_score",
+        ]
+        read_only_fields = fields
+
+    def get_relevance_score(self, obj) -> float:
+        # Placeholder — set to 1.0 until full-text ranking is implemented.
+        return 1.0

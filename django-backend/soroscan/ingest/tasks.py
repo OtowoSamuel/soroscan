@@ -1,16 +1,21 @@
 """
 Celery tasks for SoroScan background processing.
 """
+import cProfile
 import hashlib
 import hmac
+import io
 import json
 import logging
+import pstats
+import time as _time
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import Any
 
 import jsonschema
 import requests
 from celery import shared_task
+from celery.signals import task_postrun, task_prerun
 from django.db.models import F
 from django.utils import timezone
 
@@ -19,6 +24,39 @@ from .stellar_client import SorobanClient
 
 logger = logging.getLogger(__name__)
 BATCH_LEDGER_SIZE = 200
+_SLOW_TASK_THRESHOLD_S = 5.0  # log profiling stats when task exceeds this
+
+# ---------------------------------------------------------------------------
+# Celery task profiling via signals — instruments all tasks automatically
+# ---------------------------------------------------------------------------
+_task_profilers: dict[str, tuple] = {}
+
+
+@task_prerun.connect
+def _start_task_profiling(task_id: str, task, **kwargs) -> None:
+    profiler = cProfile.Profile()
+    profiler.enable()
+    _task_profilers[task_id] = (profiler, _time.monotonic())
+
+
+@task_postrun.connect
+def _stop_task_profiling(task_id: str, task, **kwargs) -> None:
+    entry = _task_profilers.pop(task_id, None)
+    if entry is None:
+        return
+    profiler, start = entry
+    profiler.disable()
+    elapsed = _time.monotonic() - start
+    if elapsed > _SLOW_TASK_THRESHOLD_S:
+        stream = io.StringIO()
+        pstats.Stats(profiler, stream=stream).sort_stats(pstats.SortKey.CUMULATIVE).print_stats(20)
+        logger.warning(
+            "Slow task %s took %.2fs\n%s",
+            task.name,
+            elapsed,
+            stream.getvalue(),
+            extra={"task_name": task.name, "total_time_s": round(elapsed, 3)},
+        )
 
 
 def _event_attr(event: Any, *names: str, default: Any = None) -> Any:
@@ -455,6 +493,9 @@ def process_new_event(event_data: dict[str, Any]) -> None:
         dispatch_webhook.delay(webhook.id, event_obj.id)
         dispatched += 1
 
+    # Evaluate alert rules asynchronously (separate queue, non-blocking)
+    evaluate_alert_rules.apply_async(args=[event_obj.id], queue="default")
+
     logger.info(
         "Dispatched event to %s webhooks",
         dispatched,
@@ -655,3 +696,245 @@ def backfill_contract_events(
             end_ledger,
         )
         raise self.retry(exc=exc)
+
+
+# ---------------------------------------------------------------------------
+# Issue: Event-driven alerts — condition evaluator and dispatch tasks
+# ---------------------------------------------------------------------------
+
+def _get_field(data: dict, dotted_path: str):
+    """Traverse a dot-notation path through nested dicts."""
+    current = data
+    for part in dotted_path.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return None
+    return current
+
+
+def evaluate_condition(condition: dict, event_data: dict) -> bool:
+    """
+    Evaluate a JSON condition AST against flattened event data.
+
+    Supported ops (case-insensitive):
+      - Logical: and, or, not
+      - Comparison: eq, neq, gt, gte, lt, lte, contains, startswith, in
+    """
+    op = (condition.get("op") or "").lower()
+
+    if op == "not":
+        sub = condition.get("condition", {})
+        return not evaluate_condition(sub, event_data)
+
+    if op in ("and", "or"):
+        subs = condition.get("conditions", [])
+        if op == "and":
+            return all(evaluate_condition(c, event_data) for c in subs)
+        return any(evaluate_condition(c, event_data) for c in subs)
+
+    # Field comparison
+    field = condition.get("field", "")
+    value = condition.get("value")
+    current = _get_field(event_data, field)
+
+    if op == "eq":
+        return str(current) == str(value) if current is not None else str(None) == str(value)
+    if op == "neq":
+        return str(current) != str(value)
+    if op in ("gt", "gte", "lt", "lte"):
+        try:
+            lhs, rhs = float(str(current)), float(str(value))
+            return {"gt": lhs > rhs, "gte": lhs >= rhs, "lt": lhs < rhs, "lte": lhs <= rhs}[op]
+        except (TypeError, ValueError):
+            return False
+    if op == "contains":
+        return str(value).lower() in str(current).lower() if current is not None else False
+    if op == "startswith":
+        return str(current).startswith(str(value)) if current is not None else False
+    if op == "in":
+        return current in value if isinstance(value, list) else str(current) == str(value)
+
+    logger.warning("Unknown condition op '%s' — treating as False", op)
+    return False
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=5,
+)
+def send_alert(self, rule_id: int, event_id: int) -> str:
+    """
+    Send a single alert for a matched AlertRule / ContractEvent pair.
+    Retries with exponential backoff on failure.
+    """
+    from .models import AlertRule, AlertExecution
+
+    try:
+        rule = AlertRule.objects.select_related("contract").get(id=rule_id, is_active=True)
+    except AlertRule.DoesNotExist:
+        return "skipped:rule_gone"
+
+    try:
+        event = ContractEvent.objects.select_related("contract").get(id=event_id)
+    except ContractEvent.DoesNotExist:
+        return "skipped:event_gone"
+
+    payload = {
+        "rule": rule.name,
+        "contract": event.contract.contract_id,
+        "event_type": event.event_type,
+        "payload": event.payload,
+        "ledger": event.ledger,
+        "timestamp": event.timestamp.isoformat(),
+    }
+
+    try:
+        if rule.action_type == "slack":
+            _send_slack_alert(rule.action_target, payload)
+        elif rule.action_type == "email":
+            _send_email_alert(rule.action_target, rule.name, payload)
+        elif rule.action_type == "webhook":
+            _send_webhook_alert(rule.action_target, payload)
+        else:
+            raise ValueError(f"Unknown action_type: {rule.action_type}")
+
+        AlertExecution.objects.create(rule=rule, event=event, status="sent", response="ok")
+        logger.info(
+            "Alert '%s' sent via %s for event %s",
+            rule.name,
+            rule.action_type,
+            event_id,
+            extra={"rule_id": rule_id, "event_id": event_id},
+        )
+        return "sent"
+
+    except Exception as exc:
+        AlertExecution.objects.create(
+            rule=rule, event=event, status="failed", response=str(exc)[:500]
+        )
+        logger.warning(
+            "Alert '%s' failed (attempt %d): %s",
+            rule.name,
+            self.request.retries + 1,
+            exc,
+            extra={"rule_id": rule_id, "event_id": event_id},
+        )
+        raise
+
+
+def _send_slack_alert(channel_or_url: str, payload: dict) -> None:
+    from django.conf import settings
+
+    text = (
+        f"*SoroScan Alert: {payload['rule']}*\n"
+        f"Contract: `{payload['contract']}`\n"
+        f"Event: `{payload['event_type']}` @ ledger {payload['ledger']}\n"
+        f"```{json.dumps(payload['payload'], indent=2)[:800]}```"
+    )
+    timeout = getattr(settings, "SLACK_ALERT_TIMEOUT_SECONDS", 10)
+    resp = requests.post(
+        channel_or_url,
+        json={"text": text},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+
+
+def _send_email_alert(to_addr: str, rule_name: str, payload: dict) -> None:
+    from django.core.mail import send_mail
+
+    subject = f"[SoroScan] Alert: {rule_name}"
+    body = (
+        f"Alert rule '{rule_name}' was triggered.\n\n"
+        f"Contract:   {payload['contract']}\n"
+        f"Event type: {payload['event_type']}\n"
+        f"Ledger:     {payload['ledger']}\n"
+        f"Timestamp:  {payload['timestamp']}\n\n"
+        f"Payload:\n{json.dumps(payload['payload'], indent=2)}"
+    )
+    send_mail(
+        subject=subject,
+        message=body,
+        from_email=None,  # uses DEFAULT_FROM_EMAIL
+        recipient_list=[to_addr],
+        fail_silently=False,
+    )
+
+
+def _send_webhook_alert(url: str, payload: dict) -> None:
+    resp = requests.post(url, json=payload, timeout=10)
+    resp.raise_for_status()
+
+
+@shared_task
+def evaluate_alert_rules(event_id: int) -> int:
+    """
+    Check all active AlertRules for the contract that owns *event_id*.
+    Dispatches ``send_alert`` tasks for every matching rule.
+    Returns the number of rules that matched.
+    """
+    from .models import AlertRule
+
+    try:
+        event = ContractEvent.objects.select_related("contract").get(id=event_id)
+    except ContractEvent.DoesNotExist:
+        return 0
+
+    rules = AlertRule.objects.filter(
+        contract=event.contract,
+        is_active=True,
+    ).order_by("id")[:AlertRule.MAX_RULES_PER_CONTRACT]
+
+    event_data = {
+        "event_type": event.event_type,
+        "ledger": event.ledger,
+        "payload": event.payload or {},
+        # Flatten payload fields under decodedPayload for AST compatibility
+        "decodedPayload": event.payload or {},
+    }
+
+    matched = 0
+    for rule in rules:
+        try:
+            if evaluate_condition(rule.condition, event_data):
+                # Fire-and-forget; exponential backoff handled inside send_alert
+                send_alert.apply_async(
+                    args=[rule.id, event_id],
+                    queue="default",
+                )
+                matched += 1
+        except Exception:
+            logger.exception(
+                "Error evaluating condition for rule %s", rule.id, extra={"rule_id": rule.id}
+            )
+
+    return matched
+
+
+# ---------------------------------------------------------------------------
+# Issue: Performance monitoring — Silk cleanup Celery task
+# ---------------------------------------------------------------------------
+
+@shared_task
+def cleanup_silk_data() -> int:
+    """
+    Prune Django Silk Request/Response profiling data older than 7 days.
+    Schedule via Celery Beat, e.g. weekly.
+    """
+    try:
+        from silk.models import Request as SilkRequest  # type: ignore[import]
+    except ImportError:
+        return 0
+
+    cutoff = timezone.now() - timedelta(days=7)
+    deleted_count, _ = SilkRequest.objects.filter(start_time__lt=cutoff).delete()
+    logger.info(
+        "Pruned %d Silk profiling records older than 7 days",
+        deleted_count,
+        extra={},
+    )
+    return deleted_count

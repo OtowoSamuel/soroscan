@@ -23,9 +23,11 @@ import requests as http_requests
 
 from soroscan.throttles import IngestRateThrottle
 
-from .models import ContractEvent, TrackedContract, WebhookSubscription
+from .models import APIKey, ContractEvent, TrackedContract, WebhookSubscription
 from .serializers import (
+    APIKeySerializer,
     ContractEventSerializer,
+    EventSearchSerializer,
     RecordEventRequestSerializer,
     TrackedContractSerializer,
     WebhookSubscriptionSerializer,
@@ -114,6 +116,7 @@ class ContractEventViewSet(viewsets.ReadOnlyModelViewSet):
     Endpoints:
     - GET /events/ - List all events (paginated)
     - GET /events/{id}/ - Get event details
+    - GET /events/search/ - Full-text + field-level search
     """
 
     queryset = ContractEvent.objects.all()
@@ -125,6 +128,129 @@ class ContractEventViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return ContractEvent.objects.select_related("contract").all()
+
+    @extend_schema(
+        parameters=[
+            inline_serializer(
+                name="EventSearchParams",
+                fields={
+                    "q": serializers.CharField(required=False),
+                    "contract_id": serializers.CharField(required=False),
+                    "event_type": serializers.CharField(required=False),
+                    "payload_contains": serializers.CharField(required=False),
+                    "payload_field": serializers.CharField(required=False),
+                    "payload_op": serializers.ChoiceField(
+                        choices=["eq", "neq", "gte", "lte", "gt", "lt", "contains", "startswith", "in"],
+                        required=False,
+                    ),
+                    "payload_value": serializers.CharField(required=False),
+                    "page": serializers.IntegerField(required=False),
+                    "page_size": serializers.IntegerField(required=False),
+                },
+            )
+        ],
+        responses=EventSearchSerializer(many=True),
+    )
+    @action(detail=False, methods=["get"])
+    def search(self, request):
+        """
+        Full-text and field-level search on contract event payloads.
+
+        Query params:
+        - q                 — free-text substring match against JSON payload text
+        - contract_id       — filter by contract
+        - event_type        — filter by event type
+        - payload_contains  — JSON containment sub-string (fast with GIN index)
+        - payload_field     — dot-notation field path, e.g. decodedPayload.to
+        - payload_op        — operator: eq|neq|gte|lte|gt|lt|contains|startswith|in
+        - payload_value     — value for field comparison
+        - page / page_size  — pagination (max 1000 per page)
+        """
+        qs = ContractEvent.objects.select_related("contract").all()
+
+        # --- contract / event_type pre-filters --------------------------------
+        contract_id = request.GET.get("contract_id")
+        if contract_id:
+            qs = qs.filter(contract__contract_id=contract_id)
+
+        event_type = request.GET.get("event_type")
+        if event_type:
+            qs = qs.filter(event_type=event_type)
+
+        # --- free-text substring search against JSON cast to text -------------
+        q = request.GET.get("q", "").strip()
+        if q:
+            # Cast JSON payload to text and do a case-insensitive contains search.
+            # The GIN index speeds up JSON containment (@>) queries; for plain text
+            # search we rely on PostgreSQL's icontains on the cast.
+            from django.db.models import TextField
+            qs = qs.annotate(
+                _payload_text=Cast("payload", output_field=TextField())
+            ).filter(_payload_text__icontains=q)
+
+        # --- payload_contains: JSON containment using GIN index ---------------
+        payload_contains = request.GET.get("payload_contains", "").strip()
+        if payload_contains:
+            # Simple text containment inside the JSON; works with GIN index
+            from django.db.models import TextField
+            if not q:  # avoid double annotation
+                qs = qs.annotate(
+                    _payload_text=Cast("payload", output_field=TextField())
+                )
+            qs = qs.filter(_payload_text__icontains=payload_contains)
+
+        # --- payload_field / payload_op / payload_value -----------------------
+        payload_field = request.GET.get("payload_field", "").strip()
+        payload_op = request.GET.get("payload_op", "eq").strip().lower()
+        payload_value = request.GET.get("payload_value")
+
+        if payload_field and payload_value is not None:
+            # Build ORM lookup key from dot-notation → Django JSONField traversal
+            # e.g. "decodedPayload.to" → payload__decodedPayload__to
+            orm_path = "payload__" + payload_field.replace(".", "__")
+
+            op_map = {
+                "eq": "",
+                "neq": None,  # handled below
+                "gte": "__gte",
+                "lte": "__lte",
+                "gt": "__gt",
+                "lt": "__lt",
+                "contains": "__icontains",
+                "startswith": "__istartswith",
+                "in": "__in",
+            }
+            suffix = op_map.get(payload_op, "")
+            if payload_op == "neq":
+                qs = qs.exclude(**{orm_path: payload_value})
+            elif payload_op == "in":
+                values = [v.strip() for v in payload_value.split(",")]
+                qs = qs.filter(**{f"{orm_path}__in": values})
+            else:
+                qs = qs.filter(**{f"{orm_path}{suffix}": payload_value})
+
+        # --- pagination -------------------------------------------------------
+        try:
+            page = max(1, int(request.GET.get("page", 1)))
+            page_size = min(max(1, int(request.GET.get("page_size", 50))), 1000)
+        except (ValueError, TypeError):
+            page = 1
+            page_size = 50
+
+        qs = qs.order_by("-timestamp")
+        total = qs.count()
+        offset = (page - 1) * page_size
+        items = list(qs[offset: offset + page_size])
+
+        serializer = EventSearchSerializer(items, many=True)
+        return Response(
+            {
+                "count": total,
+                "page": page,
+                "page_size": page_size,
+                "results": serializer.data,
+            }
+        )
 
 
 class WebhookSubscriptionViewSet(viewsets.ModelViewSet):
@@ -204,6 +330,43 @@ class WebhookSubscriptionViewSet(viewsets.ModelViewSet):
             )
 
         return Response({"status": "test_webhook_queued"})
+
+
+class APIKeyViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing API keys with tiered rate limiting.
+
+    Endpoints:
+    - GET /api-keys/ - List your API keys
+    - POST /api-keys/ - Create a new API key
+    - GET /api-keys/{id}/ - Get key details (key value shown only on creation)
+    - DELETE /api-keys/{id}/ - Revoke an API key
+    """
+
+    serializer_class = APIKeySerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post", "delete", "head", "options"]
+
+    def get_queryset(self):
+        return APIKey.objects.filter(user=self.request.user).order_by("-created_at")
+
+    def perform_create(self, serializer):
+        key_instance = serializer.save(user=self.request.user)
+        # Expose plain-text key *only* in the creation response
+        self.request._created_key_plain = key_instance.key
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        plain_key = getattr(request, "_created_key_plain", None)
+        if plain_key:
+            response.data["key"] = plain_key
+        return response
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @extend_schema(

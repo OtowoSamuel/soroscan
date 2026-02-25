@@ -18,30 +18,25 @@ from .services.timeline import build_timeline
 
 
 def _get_authenticated_user(info: Info):
-    """Safely extract authenticated user from context.
-    
-    Returns the user if authenticated, otherwise returns None.
-    Handles cases where context is None (e.g., during testing).
-    """
+    """Safely extract authenticated user from context."""
     if info.context is None:
         return None
-    
-    if not hasattr(info.context, 'request'):
+    if not hasattr(info.context, "request"):
         return None
-        
     request = info.context.request
     if request is None:
         return None
-        
-    if not hasattr(request, 'user'):
+    if not hasattr(request, "user"):
         return None
-        
     user = request.user
-    if user and hasattr(user, 'is_authenticated') and user.is_authenticated:
+    if user and hasattr(user, "is_authenticated") and user.is_authenticated:
         return user
-        
     return None
 
+
+# ---------------------------------------------------------------------------
+# GraphQL types
+# ---------------------------------------------------------------------------
 
 @strawberry_django.type(TrackedContract)
 class ContractType:
@@ -77,6 +72,54 @@ class EventType:
     @strawberry.field
     def contract_name(self) -> str:
         return self.contract.name
+
+
+@strawberry.type
+class EventSearchResult:
+    """A single event returned by the search resolver with a relevance score."""
+
+    id: int
+    contract_id: str
+    event_type: str
+    payload: strawberry.scalars.JSON
+    ledger: int
+    timestamp: datetime
+    tx_hash: str
+    relevance_score: float = 1.0
+
+
+@strawberry.input
+class EventFieldFilter:
+    """Single field-level comparison filter."""
+
+    eq: Optional[str] = None
+    neq: Optional[str] = None
+    gte: Optional[str] = None
+    lte: Optional[str] = None
+    gt: Optional[str] = None
+    lt: Optional[str] = None
+    contains: Optional[str] = None
+    startswith: Optional[str] = None
+    in_list: Optional[list[str]] = strawberry.field(
+        name="in", default=None, description="Value must be one of these"
+    )
+
+
+@strawberry.input
+class EventSearchQuery:
+    """
+    Input type for the ``searchEvents`` resolver.
+
+    ``filters`` maps a dot-notation payload field path to a comparison object,
+    e.g. ``{\"decodedPayload.to\": {eq: \"GXXX...\"}}``.
+    """
+
+    contract_id: Optional[str] = None
+    payload_contains: Optional[str] = None
+    event_type: Optional[str] = None
+    filters: Optional[strawberry.scalars.JSON] = None
+    first: int = 20
+    after: Optional[str] = None
 
 
 @strawberry.type
@@ -238,6 +281,84 @@ class Query:
             return ContractEvent.objects.get(id=id)
         except ContractEvent.DoesNotExist:
             return None
+
+    @strawberry.field
+    def search_events(self, query: EventSearchQuery) -> list[EventSearchResult]:
+        """
+        Full-text and field-level search on contract event payloads.
+
+        Supports:
+        - ``contractId`` — filter by contract address
+        - ``eventType`` — filter by event type
+        - ``payloadContains`` — case-insensitive substring in JSON payload text
+        - ``filters`` — dict mapping dot-notation field paths to comparison objects
+          Supported operators per field: eq, neq, gte, lte, gt, lt, contains,
+          startswith, in
+        - Cursor-based pagination via ``first`` / ``after``
+        """
+        from django.db.models import TextField
+        from django.db.models.functions import Cast
+
+        qs = ContractEvent.objects.select_related("contract").all()
+
+        if query.contract_id:
+            qs = qs.filter(contract__contract_id=query.contract_id)
+        if query.event_type:
+            qs = qs.filter(event_type=query.event_type)
+
+        if query.payload_contains:
+            qs = qs.annotate(_pt=Cast("payload", output_field=TextField())).filter(
+                _pt__icontains=query.payload_contains
+            )
+
+        if query.filters and isinstance(query.filters, dict):
+            for field_path, ops in query.filters.items():
+                if not isinstance(ops, dict):
+                    continue
+                orm_base = "payload__" + field_path.replace(".", "__")
+                for op, val in ops.items():
+                    if val is None:
+                        continue
+                    if op == "eq":
+                        qs = qs.filter(**{orm_base: val})
+                    elif op == "neq":
+                        qs = qs.exclude(**{orm_base: val})
+                    elif op in ("gte", "lte", "gt", "lt"):
+                        qs = qs.filter(**{f"{orm_base}__{op}": val})
+                    elif op == "contains":
+                        qs = qs.filter(**{f"{orm_base}__icontains": val})
+                    elif op == "startswith":
+                        qs = qs.filter(**{f"{orm_base}__istartswith": val})
+                    elif op in ("in", "in_list"):
+                        values = val if isinstance(val, list) else [val]
+                        qs = qs.filter(**{f"{orm_base}__in": values})
+
+        # Cursor pagination (max 1000 per page)
+        first = max(0, min(query.first, 1000))
+        if query.after:
+            try:
+                decoded = base64.b64decode(query.after).decode()
+                after_id = int(decoded.split(":", 1)[1])
+                qs = qs.filter(id__gt=after_id)
+            except (ValueError, IndexError, UnicodeDecodeError):
+                pass
+
+        qs = qs.order_by("id")
+        items = list(qs[:first])
+
+        return [
+            EventSearchResult(
+                id=e.id,
+                contract_id=e.contract.contract_id,
+                event_type=e.event_type,
+                payload=e.payload,
+                ledger=e.ledger,
+                timestamp=e.timestamp,
+                tx_hash=e.tx_hash,
+                relevance_score=1.0,
+            )
+            for e in items
+        ]
 
     @strawberry.field
     def contract_stats(self, contract_id: str) -> Optional[ContractStats]:
