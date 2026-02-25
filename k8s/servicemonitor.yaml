@@ -1,0 +1,38 @@
+# k8s/servicemonitor.yaml
+#
+# Prometheus Operator ServiceMonitor for SoroScan.
+#
+# Prerequisites:
+#   - Prometheus Operator (kube-prometheus-stack or standalone) installed in the cluster.
+#   - The SoroScan Django service is named "soroscan-backend" and lives in the
+#     "soroscan" namespace.  Adjust labels / namespaceSelector as needed.
+#
+# Apply with:
+#   kubectl apply -f k8s/servicemonitor.yaml
+#
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: soroscan-backend
+  namespace: soroscan
+  labels:
+    # Must match the label selector used by your Prometheus CR's
+    # serviceMonitorSelector.  Adjust if your Prometheus is configured
+    # differently (e.g. release: kube-prometheus-stack).
+    app: soroscan-backend
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: soroscan-backend
+  namespaceSelector:
+    matchNames:
+      - soroscan
+  endpoints:
+    - port: http          # Must match the Service port name exposing port 8000
+      path: /metrics
+      interval: 30s       # Scrape every 30 seconds
+      scrapeTimeout: 10s
+      scheme: http
+      # If /metrics is behind TLS, change scheme to https and configure
+      # tlsConfig accordingly.

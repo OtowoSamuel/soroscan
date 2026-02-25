@@ -17,6 +17,10 @@ from soroscan.graphql_views import ThrottledGraphQLView
 from soroscan.ingest.schema import schema
 
 urlpatterns = [
+    # Prometheus metrics — must be unauthenticated; placed before any auth middleware
+    # that would intercept requests.  django_prometheus.urls exposes GET /metrics.
+    path("", include("django_prometheus.urls")),
+
     path("admin/", admin.site.urls),
     path("api/ingest/", include("soroscan.ingest.urls")),
     path("graphql/", ThrottledGraphQLView.as_view(schema=schema)),
