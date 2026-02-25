@@ -1,0 +1,53 @@
+{
+  "name": "@soroscan/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript/JavaScript client SDK for the SoroScan API",
+  "keywords": ["stellar", "soroban", "soroscan", "blockchain", "sdk"],
+  "homepage": "https://github.com/SoroScan/soroscan/tree/main/sdk/typescript",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SoroScan/soroscan.git",
+    "directory": "sdk/typescript"
+  },
+  "license": "MIT",
+  "author": "SoroScan Contributors",
+  "sideEffects": false,
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.cjs"
+      }
+    }
+  },
+  "main": "./dist/cjs/index.cjs",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run build:esm && npm run build:cjs && npm run build:cjs:rename",
+    "build:esm": "tsc -p tsconfig.json --outDir dist/esm --module esnext --moduleResolution bundler --declaration --declarationDir dist/esm",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:cjs:rename": "node scripts/rename-cjs.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
