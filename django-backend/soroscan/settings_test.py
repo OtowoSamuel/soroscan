@@ -17,6 +17,7 @@ FRONTEND_BASE_URL = "http://localhost:3000"
 
 # Application definition
 INSTALLED_APPS = [
+    "django_prometheus",  # must be before django.contrib apps
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -33,6 +34,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",  # must be first
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -42,9 +44,10 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "django_prometheus.middleware.PrometheusAfterMiddleware",   # must be last
 ]
 
-ROOT_URLCONF = "soroscan.urls_test"
+ROOT_URLCONF = "soroscan.urls"  # use main urls.py which has the /metrics route
 
 TEMPLATES = [
     {

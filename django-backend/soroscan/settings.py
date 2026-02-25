@@ -46,6 +46,7 @@ FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:3000")
 # Application definition
 INSTALLED_APPS = [
     "daphne",
+    "django_prometheus",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -67,6 +68,8 @@ INSTALLED_APPS = [
 ENABLE_SILK = env.bool("ENABLE_SILK", default=False)
 
 MIDDLEWARE = [
+    # PrometheusBeforeMiddleware must be first to capture all requests.
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "soroscan.middleware.ReverseProxyFixedIPMiddleware",
@@ -78,6 +81,8 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # PrometheusAfterMiddleware must be last to record response codes/latencies.
+    "django_prometheus.middleware.PrometheusAfterMiddleware",
 ]
 
 if ENABLE_SILK:
@@ -243,6 +248,11 @@ STELLAR_NETWORK_PASSPHRASE = env(
 )
 SOROSCAN_CONTRACT_ID = env("SOROSCAN_CONTRACT_ID", default="")
 INDEXER_SECRET_KEY = env("INDEXER_SECRET_KEY", default="")
+
+# Prometheus
+# Expose the /metrics endpoint without authentication.
+# The URL is registered in urls.py via django_prometheus.urls.
+PROMETHEUS_EXPORT_MIGRATIONS = False  # avoid migration noise in metrics
 
 # Logging: set LOG_FORMAT=json for structured JSON logs (no PII in messages or extra).
 LOG_FORMAT = env("LOG_FORMAT", default="")
