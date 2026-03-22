@@ -1,17 +1,16 @@
-# Rust / Cargo
+# Rust build artifacts
 /target/
-**/*.rs.bk
 Cargo.lock
 
+# Test snapshots
+test_snapshots/
+
 # IDE
-.idea/
 .vscode/
+.idea/
 *.swp
 *.swo
 
-# macOS
+# OS
 .DS_Store
-
-# Soroban
-*.wasm
-!fixtures/*.wasm
+Thumbs.db
