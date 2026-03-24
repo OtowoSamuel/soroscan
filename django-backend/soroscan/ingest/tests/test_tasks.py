@@ -3,17 +3,20 @@ Tests for Celery tasks — webhook dispatch, retry logic, HMAC signing, suspensi
 """
 import hashlib
 import hmac
+from datetime import timedelta
 
 import pytest
 import requests
 import requests.exceptions
 import responses
 from celery.exceptions import Retry
+from django.utils import timezone
 
-from soroscan.ingest.models import WebhookDeliveryLog, WebhookSubscription
+from soroscan.ingest.models import AdminAction, RemediationIncident, RemediationRule, WebhookDeliveryLog, WebhookSubscription
 from soroscan.ingest.tasks import (
     cleanup_webhook_delivery_logs,
     dispatch_webhook,
+    evaluate_remediation_rules,
     process_new_event,
     validate_event_payload,
 )
@@ -499,3 +502,110 @@ class TestCleanupWebhookDeliveryLogs:
     def test_returns_zero_when_nothing_to_prune(self):
         deleted_count = cleanup_webhook_delivery_logs.apply().result
         assert deleted_count == 0
+
+
+# ---------------------------------------------------------------------------
+# evaluate_remediation_rules
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestEvaluateRemediationRules:
+    @responses.activate
+    def test_alerts_before_action_then_executes_after_grace(self, contract):
+        # No recent events => anomaly should trigger.
+        responses.add(responses.POST, "https://ops.example.com/hook", status=200)
+
+        rule = RemediationRule.objects.create(
+            name="No events for 1h",
+            condition={
+                "type": "no_events_for_minutes",
+                "contract_id": contract.contract_id,
+                "minutes": 60,
+            },
+            actions=[{"type": "pause_contract"}],
+            enabled=True,
+            grace_period_minutes=10,
+            alert_type=RemediationRule.ALERT_SLACK,
+            alert_target="https://ops.example.com/hook",
+            dry_run=False,
+        )
+
+        first = evaluate_remediation_rules.apply().result
+        assert first["detected"] == 1
+        assert first["alerted"] == 1
+        assert first["executed"] == 0
+
+        incident = RemediationIncident.objects.get(rule=rule, contract=contract)
+        RemediationIncident.objects.filter(pk=incident.pk).update(
+            action_after_at=timezone.now() - timedelta(minutes=1)
+        )
+
+        second = evaluate_remediation_rules.apply().result
+        assert second["executed"] == 1
+
+        contract.refresh_from_db()
+        assert contract.is_active is False
+
+    @responses.activate
+    def test_dry_run_does_not_execute_actions(self, contract):
+        responses.add(responses.POST, "https://ops.example.com/hook", status=200)
+
+        rule = RemediationRule.objects.create(
+            name="No events dry run",
+            condition={
+                "type": "no_events_for_minutes",
+                "contract_id": contract.contract_id,
+                "minutes": 60,
+            },
+            actions=[{"type": "pause_contract"}, {"type": "disable_webhooks"}],
+            enabled=True,
+            grace_period_minutes=0,
+            alert_type=RemediationRule.ALERT_SLACK,
+            alert_target="https://ops.example.com/hook",
+            dry_run=True,
+        )
+
+        # First run creates/alerts incident.
+        evaluate_remediation_rules.apply().result
+
+        # Second run executes in dry-run mode.
+        summary = evaluate_remediation_rules.apply().result
+        assert summary["executed"] == 1
+
+        contract.refresh_from_db()
+        assert contract.is_active is True
+        incident = RemediationIncident.objects.get(rule=rule, contract=contract)
+        assert incident.status == RemediationIncident.STATUS_EXECUTED
+
+    def test_resolves_incident_when_anomaly_clears(self, contract):
+        rule = RemediationRule.objects.create(
+            name="No events resolve",
+            condition={
+                "type": "no_events_for_minutes",
+                "contract_id": contract.contract_id,
+                "minutes": 60,
+            },
+            actions=[{"type": "pause_contract"}],
+            enabled=True,
+            grace_period_minutes=10,
+            alert_type=RemediationRule.ALERT_WEBHOOK,
+            alert_target="https://ops.example.com/hook",
+            dry_run=False,
+        )
+
+        # Detect incident first.
+        evaluate_remediation_rules.apply().result
+
+        # Add a recent event so condition clears.
+        ContractEventFactory(
+            contract=contract,
+            timestamp=timezone.now(),
+            decoding_status="success",
+        )
+
+        summary = evaluate_remediation_rules.apply().result
+        assert summary["resolved"] == 1
+
+        incident = RemediationIncident.objects.get(rule=rule, contract=contract)
+        assert incident.status == RemediationIncident.STATUS_RESOLVED
+        assert AdminAction.objects.filter(action="remediation_resolved").exists()

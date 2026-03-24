@@ -24,6 +24,8 @@ from .models import (
     DataRetentionPolicy,
     EventSchema,
     IndexerState,
+    RemediationIncident,
+    RemediationRule,
     TrackedContract,
     WebhookDeliveryLog,
     WebhookSubscription,
@@ -632,6 +634,60 @@ class AlertExecutionAdmin(AdminAuditMixin, admin.ModelAdmin):
     def status_colored(self, obj):
         color = "#28a745" if obj.status == "sent" else "#dc3545"
         return format_html('<span style="color:{};font-weight:bold">{}</span>', color, obj.status)
+
+
+@admin.register(RemediationRule)
+class RemediationRuleAdmin(AdminAuditMixin, admin.ModelAdmin):
+    list_display = [
+        "name",
+        "enabled",
+        "grace_period_minutes",
+        "alert_type",
+        "dry_run",
+        "created_at",
+    ]
+    list_filter = ["enabled", "alert_type", "dry_run", "created_at"]
+    search_fields = ["name", "alert_target"]
+    readonly_fields = ["created_at", "updated_at"]
+    ordering = ["-created_at"]
+
+
+@admin.register(RemediationIncident)
+class RemediationIncidentAdmin(AdminAuditMixin, admin.ModelAdmin):
+    list_display = [
+        "id",
+        "rule",
+        "contract",
+        "status",
+        "first_detected_at",
+        "alerted_at",
+        "executed_at",
+        "resolved_at",
+    ]
+    list_filter = ["status", "first_detected_at"]
+    search_fields = ["rule__name", "contract__contract_id", "contract__name"]
+    readonly_fields = [
+        "rule",
+        "contract",
+        "status",
+        "anomaly_snapshot",
+        "first_detected_at",
+        "alerted_at",
+        "action_after_at",
+        "executed_at",
+        "resolved_at",
+        "last_seen_at",
+    ]
+    ordering = ["-first_detected_at"]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 # ---------------------------------------------------------------------------

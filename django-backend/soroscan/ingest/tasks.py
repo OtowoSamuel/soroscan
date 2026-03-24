@@ -24,7 +24,7 @@ from django.conf import settings
 from django.db.models import F
 from django.utils import timezone
 
-from .models import ContractABI, ContractEvent, ContractSigningKey, TrackedContract, WebhookSubscription, IndexerState, EventSchema
+from .models import ContractABI, ContractEvent, ContractSigningKey, TrackedContract, WebhookSubscription, IndexerState, EventSchema, RemediationRule, RemediationIncident, AdminAction
 from .stellar_client import SorobanClient
 
 logger = logging.getLogger(__name__)
@@ -1162,6 +1162,270 @@ def evaluate_alert_rules(event_id: int) -> int:
             )
 
     return matched
+
+
+# ---------------------------------------------------------------------------
+# Automated incident response (remediation)
+# ---------------------------------------------------------------------------
+
+def _send_ops_alert(alert_type: str, target: str, message: str, payload: dict[str, Any]) -> None:
+    if not target:
+        logger.warning("Remediation alert target is empty; skipping alert")
+        return
+
+    if alert_type == RemediationRule.ALERT_SLACK:
+        timeout = getattr(settings, "SLACK_ALERT_TIMEOUT_SECONDS", 10)
+        resp = requests.post(target, json={"text": f"{message}\n```{json.dumps(payload, indent=2)[:1500]}```"}, timeout=timeout)
+        resp.raise_for_status()
+        return
+
+    if alert_type == RemediationRule.ALERT_EMAIL:
+        from django.core.mail import send_mail
+
+        send_mail(
+            subject="[SoroScan] Automated remediation alert",
+            message=f"{message}\n\n{json.dumps(payload, indent=2)}",
+            from_email=None,
+            recipient_list=[target],
+            fail_silently=False,
+        )
+        return
+
+    if alert_type == RemediationRule.ALERT_WEBHOOK:
+        resp = requests.post(target, json={"message": message, "payload": payload}, timeout=10)
+        resp.raise_for_status()
+        return
+
+    logger.warning("Unknown remediation alert type: %s", alert_type)
+
+
+def _resolve_contract_for_rule(rule: RemediationRule) -> TrackedContract | None:
+    contract_id = (rule.condition or {}).get("contract_id")
+    if not contract_id:
+        return None
+    return TrackedContract.objects.filter(contract_id=contract_id).first()
+
+
+def _detect_anomaly(rule: RemediationRule, contract: TrackedContract) -> tuple[bool, dict[str, Any]]:
+    condition = rule.condition or {}
+    condition_type = condition.get("type")
+    now = timezone.now()
+
+    if condition_type == RemediationRule.CONDITION_NO_EVENTS:
+        minutes = int(condition.get("minutes", 60))
+        cutoff = now - timedelta(minutes=minutes)
+        has_recent = ContractEvent.objects.filter(contract=contract, timestamp__gte=cutoff).exists()
+        return (not has_recent, {"type": condition_type, "minutes": minutes, "cutoff": cutoff.isoformat()})
+
+    if condition_type == RemediationRule.CONDITION_DECODE_ERROR_SPIKE:
+        window_minutes = int(condition.get("window_minutes", 60))
+        threshold_percent = float(condition.get("threshold_percent", 50))
+        min_events = int(condition.get("min_events", 10))
+        cutoff = now - timedelta(minutes=window_minutes)
+        qs = ContractEvent.objects.filter(contract=contract, timestamp__gte=cutoff)
+        total = qs.count()
+        failed = qs.filter(decoding_status="failed").count()
+        ratio = (failed / total * 100.0) if total > 0 else 0.0
+        triggered = total >= min_events and ratio >= threshold_percent
+        return (
+            triggered,
+            {
+                "type": condition_type,
+                "window_minutes": window_minutes,
+                "threshold_percent": threshold_percent,
+                "min_events": min_events,
+                "total": total,
+                "failed": failed,
+                "ratio": ratio,
+            },
+        )
+
+    logger.warning("Unknown remediation condition type for rule=%s", rule.id)
+    return (False, {"type": condition_type, "error": "unknown_condition_type"})
+
+
+def _execute_remediation_actions(
+    incident: RemediationIncident,
+    *,
+    effective_dry_run: bool,
+) -> list[dict[str, Any]]:
+    executed: list[dict[str, Any]] = []
+
+    for action in incident.rule.actions or []:
+        action_type = (action or {}).get("type")
+        entry: dict[str, Any] = {"type": action_type, "dry_run": effective_dry_run, "status": "skipped"}
+
+        if action_type == "pause_contract":
+            if not effective_dry_run:
+                incident.contract.is_active = False
+                incident.contract.save(update_fields=["is_active"])
+            entry["status"] = "executed"
+
+        elif action_type == "disable_webhooks":
+            if not effective_dry_run:
+                disabled = WebhookSubscription.objects.filter(contract=incident.contract, is_active=True).update(
+                    is_active=False,
+                    status=WebhookSubscription.STATUS_SUSPENDED,
+                )
+                entry["disabled_count"] = disabled
+            entry["status"] = "executed"
+
+        elif action_type == "send_alert":
+            target = action.get("target") or incident.rule.alert_target
+            alert_type = action.get("alert_type") or incident.rule.alert_type
+            message = action.get("message") or (
+                f"Remediation action requested for rule '{incident.rule.name}' "
+                f"on contract {incident.contract.contract_id}"
+            )
+            if not effective_dry_run:
+                _send_ops_alert(
+                    alert_type,
+                    target,
+                    message,
+                    {
+                        "rule_id": incident.rule_id,
+                        "incident_id": incident.id,
+                        "contract_id": incident.contract.contract_id,
+                        "snapshot": incident.anomaly_snapshot,
+                    },
+                )
+            entry["status"] = "executed"
+
+        else:
+            entry["error"] = "unknown_action"
+
+        executed.append(entry)
+
+    return executed
+
+
+@shared_task
+def evaluate_remediation_rules(dry_run: bool = False) -> dict[str, Any]:
+    """
+    Evaluate remediation rules and execute actions after grace period.
+
+    Flow:
+      1. Detect anomaly from rule.condition
+      2. Alert ops immediately (always before actions)
+      3. Wait grace_period_minutes
+      4. Execute actions (or simulate in dry-run)
+    """
+    now = timezone.now()
+    summary = {
+        "evaluated": 0,
+        "detected": 0,
+        "alerted": 0,
+        "executed": 0,
+        "resolved": 0,
+        "dry_run": dry_run,
+    }
+
+    rules = RemediationRule.objects.filter(enabled=True).order_by("id")
+
+    for rule in rules:
+        summary["evaluated"] += 1
+        contract = _resolve_contract_for_rule(rule)
+        if contract is None:
+            continue
+
+        triggered, snapshot = _detect_anomaly(rule, contract)
+
+        open_incident = (
+            RemediationIncident.objects.filter(
+                rule=rule,
+                contract=contract,
+                status__in=[RemediationIncident.STATUS_ALERTED, RemediationIncident.STATUS_EXECUTED],
+                resolved_at__isnull=True,
+            )
+            .order_by("-first_detected_at")
+            .first()
+        )
+
+        if not triggered:
+            if open_incident and open_incident.status != RemediationIncident.STATUS_RESOLVED:
+                open_incident.status = RemediationIncident.STATUS_RESOLVED
+                open_incident.resolved_at = now
+                open_incident.save(update_fields=["status", "resolved_at", "last_seen_at"])
+                AdminAction.objects.create(
+                    user=None,
+                    action="remediation_resolved",
+                    object_type="tracked_contract",
+                    object_id=str(contract.pk),
+                    ip_address="0.0.0.0",
+                    changes={"rule_id": rule.id, "incident_id": open_incident.id},
+                )
+                summary["resolved"] += 1
+            continue
+
+        summary["detected"] += 1
+
+        if open_incident is None:
+            open_incident = RemediationIncident.objects.create(
+                rule=rule,
+                contract=contract,
+                status=RemediationIncident.STATUS_ALERTED,
+                anomaly_snapshot=snapshot,
+                alerted_at=now,
+                action_after_at=now + timedelta(minutes=rule.grace_period_minutes),
+            )
+            summary["alerted"] += 1
+
+            message = (
+                f"Remediation alert: anomaly detected for rule '{rule.name}' on contract "
+                f"{contract.contract_id}. Actions scheduled after {rule.grace_period_minutes} minute(s)."
+            )
+            try:
+                _send_ops_alert(rule.alert_type, rule.alert_target, message, snapshot)
+            except Exception:
+                logger.warning("Failed to send remediation pre-alert for rule=%s", rule.id, exc_info=True)
+
+            AdminAction.objects.create(
+                user=None,
+                action="remediation_alerted",
+                object_type="tracked_contract",
+                object_id=str(contract.pk),
+                ip_address="0.0.0.0",
+                changes={
+                    "rule_id": rule.id,
+                    "incident_id": open_incident.id,
+                    "grace_period_minutes": rule.grace_period_minutes,
+                    "snapshot": snapshot,
+                },
+            )
+            continue
+
+        if open_incident.status == RemediationIncident.STATUS_EXECUTED:
+            open_incident.last_seen_at = now
+            open_incident.save(update_fields=["last_seen_at"])
+            continue
+
+        if open_incident.action_after_at and now < open_incident.action_after_at:
+            continue
+
+        effective_dry_run = dry_run or rule.dry_run
+        executed = _execute_remediation_actions(open_incident, effective_dry_run=effective_dry_run)
+
+        open_incident.status = RemediationIncident.STATUS_EXECUTED
+        open_incident.executed_at = now
+        open_incident.anomaly_snapshot = snapshot
+        open_incident.save(update_fields=["status", "executed_at", "anomaly_snapshot", "last_seen_at"])
+
+        AdminAction.objects.create(
+            user=None,
+            action="remediation_executed",
+            object_type="tracked_contract",
+            object_id=str(contract.pk),
+            ip_address="0.0.0.0",
+            changes={
+                "rule_id": rule.id,
+                "incident_id": open_incident.id,
+                "dry_run": effective_dry_run,
+                "actions": executed,
+            },
+        )
+        summary["executed"] += 1
+
+    return summary
 
 
 # ---------------------------------------------------------------------------

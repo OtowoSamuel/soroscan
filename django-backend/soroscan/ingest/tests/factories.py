@@ -6,6 +6,8 @@ from soroscan.ingest.models import (
     ContractABI,
     ContractEvent,
     EventSchema,
+    RemediationIncident,
+    RemediationRule,
     TrackedContract,
     WebhookDeliveryLog,
     WebhookSubscription,
@@ -100,3 +102,33 @@ class ContractABIFactory(DjangoModelFactory):
             ],
         }
     ]
+
+
+class RemediationRuleFactory(DjangoModelFactory):
+    class Meta:
+        model = RemediationRule
+
+    name = factory.Sequence(lambda n: f"Remediation Rule {n}")
+    condition = factory.LazyAttribute(
+        lambda o: {
+            "type": "no_events_for_minutes",
+            "contract_id": f"C{'A' * 55}",
+            "minutes": 60,
+        }
+    )
+    actions = [{"type": "pause_contract"}]
+    enabled = True
+    grace_period_minutes = 10
+    alert_type = RemediationRule.ALERT_SLACK
+    alert_target = "https://example.com/remediation-alert"
+    dry_run = False
+
+
+class RemediationIncidentFactory(DjangoModelFactory):
+    class Meta:
+        model = RemediationIncident
+
+    rule = factory.SubFactory(RemediationRuleFactory)
+    contract = factory.SubFactory(TrackedContractFactory)
+    status = RemediationIncident.STATUS_ALERTED
+    anomaly_snapshot = {"type": "no_events_for_minutes", "minutes": 60}

@@ -618,6 +618,105 @@ class AlertExecution(models.Model):
         return f"Alert {self.rule.name}: {self.status} @ {self.created_at}"
 
 
+class RemediationRule(models.Model):
+    """
+    Automated incident response rule.
+
+    ``condition`` describes anomaly detection criteria.
+    ``actions`` is a list of action objects, e.g.:
+      [{"type": "pause_contract"}, {"type": "disable_webhooks"}]
+    """
+
+    CONDITION_NO_EVENTS = "no_events_for_minutes"
+    CONDITION_DECODE_ERROR_SPIKE = "decode_error_spike"
+    CONDITION_CHOICES = [
+        (CONDITION_NO_EVENTS, "No events for N minutes"),
+        (CONDITION_DECODE_ERROR_SPIKE, "Decode error spike"),
+    ]
+
+    ALERT_SLACK = "slack"
+    ALERT_EMAIL = "email"
+    ALERT_WEBHOOK = "webhook"
+    ALERT_TYPE_CHOICES = [
+        (ALERT_SLACK, "Slack"),
+        (ALERT_EMAIL, "Email"),
+        (ALERT_WEBHOOK, "Webhook"),
+    ]
+
+    name = models.CharField(max_length=256)
+    condition = models.JSONField(
+        help_text="Condition JSON, e.g. {'type': 'no_events_for_minutes', 'contract_id': 'C...', 'minutes': 60}",
+    )
+    actions = models.JSONField(
+        default=list,
+        help_text="List of action objects: pause_contract, send_alert, disable_webhooks",
+    )
+    enabled = models.BooleanField(default=True)
+    grace_period_minutes = models.PositiveIntegerField(default=10)
+    alert_type = models.CharField(
+        max_length=16,
+        choices=ALERT_TYPE_CHOICES,
+        default=ALERT_SLACK,
+    )
+    alert_target = models.TextField(
+        blank=True,
+        help_text="Ops destination (Slack webhook URL, email, or webhook URL)",
+    )
+    dry_run = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"RemediationRule({self.name})"
+
+
+class RemediationIncident(models.Model):
+    """
+    Tracks lifecycle of a detected anomaly for one remediation rule.
+    """
+
+    STATUS_ALERTED = "alerted"
+    STATUS_EXECUTED = "executed"
+    STATUS_RESOLVED = "resolved"
+    STATUS_CHOICES = [
+        (STATUS_ALERTED, "Alerted"),
+        (STATUS_EXECUTED, "Executed"),
+        (STATUS_RESOLVED, "Resolved"),
+    ]
+
+    rule = models.ForeignKey(
+        RemediationRule,
+        on_delete=models.CASCADE,
+        related_name="incidents",
+    )
+    contract = models.ForeignKey(
+        TrackedContract,
+        on_delete=models.CASCADE,
+        related_name="remediation_incidents",
+    )
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_ALERTED)
+    anomaly_snapshot = models.JSONField(default=dict)
+    first_detected_at = models.DateTimeField(auto_now_add=True)
+    alerted_at = models.DateTimeField(null=True, blank=True)
+    action_after_at = models.DateTimeField(null=True, blank=True)
+    executed_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-first_detected_at"]
+        indexes = [
+            models.Index(fields=["rule", "contract", "status"]),
+            models.Index(fields=["action_after_at"]),
+        ]
+
+    def __str__(self):
+        return f"Incident(rule={self.rule_id}, contract={self.contract_id}, status={self.status})"
+
+
 # ---------------------------------------------------------------------------
 # Data Retention Policies and Automated Archival
 # ---------------------------------------------------------------------------

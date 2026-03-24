@@ -226,6 +226,7 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ROUTES = {
     "soroscan.ingest.tasks.backfill_contract_events": {"queue": "backfill"},
+    "soroscan.ingest.tasks.evaluate_remediation_rules": {"queue": "default"},
 }
 
 # Celery Beat periodic task schedule
@@ -241,6 +242,10 @@ CELERY_BEAT_SCHEDULE = {
     "archive-old-events": {
         "task": "soroscan.ingest.tasks.archive_old_events",
         "schedule": 86400,  # daily
+    },
+    "evaluate-remediation-rules": {
+        "task": "soroscan.ingest.tasks.evaluate_remediation_rules",
+        "schedule": 300,  # every 5 minutes
     },
 }
 
