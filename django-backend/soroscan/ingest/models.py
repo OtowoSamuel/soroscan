@@ -5,6 +5,7 @@ import hashlib
 import secrets
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import models
 
 User = get_user_model()
@@ -175,6 +176,40 @@ class ContractABI(models.Model):
         return f"ABI for {self.contract}"
 
 
+class ContractSigningKey(models.Model):
+    """
+    Public verification key registered per contract for event signature checks.
+    """
+
+    class Algorithm(models.TextChoices):
+        ED25519 = "ed25519", "Ed25519"
+        ECDSA = "ecdsa", "ECDSA"
+
+    contract = models.OneToOneField(
+        TrackedContract,
+        on_delete=models.CASCADE,
+        related_name="signing_key",
+    )
+    algorithm = models.CharField(
+        max_length=16,
+        choices=Algorithm.choices,
+        default=Algorithm.ED25519,
+    )
+    public_key = models.TextField(
+        help_text="Public key for signature verification (hex/base64/raw PEM)",
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Contract Signing Key"
+        verbose_name_plural = "Contract Signing Keys"
+
+    def __str__(self):
+        return f"SigningKey({self.contract.contract_id[:8]}..., {self.algorithm})"
+
+
 class ContractEvent(models.Model):
     """
     Individual events emitted by tracked contracts.
@@ -247,6 +282,17 @@ class ContractEvent(models.Model):
         db_index=True,
         help_text="Result of ABI-based XDR decoding",
     )
+    signature_status = models.CharField(
+        max_length=16,
+        choices=[
+            ("valid", "Valid"),
+            ("invalid", "Invalid"),
+            ("missing", "Missing"),
+        ],
+        default="missing",
+        db_index=True,
+        help_text="Result of event signature verification",
+    )
 
     class Meta:
         ordering = ["-timestamp"]
@@ -257,6 +303,7 @@ class ContractEvent(models.Model):
             models.Index(fields=["tx_hash"]),
             models.Index(fields=["contract", "ledger", "event_index"]),
             models.Index(fields=["invocation"]),
+            models.Index(fields=["signature_status"]),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -723,3 +770,43 @@ class ArchivalAuditLog(models.Model):
 
     def __str__(self):
         return f"AuditLog({self.action}, {self.event_count} events, {self.created_at})"
+
+
+class AdminAction(models.Model):
+    """
+    Immutable audit trail for admin actions.
+
+    Records are append-only and retained for at least 7 years.
+    """
+
+    RETENTION_YEARS = 7
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+    )
+    action = models.CharField(max_length=128)
+    object_type = models.CharField(max_length=32)
+    object_id = models.CharField(max_length=255)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+    ip_address = models.GenericIPAddressField(default="0.0.0.0")
+    changes = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["action", "timestamp"]),
+            models.Index(fields=["object_type", "object_id"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError("AdminAction is immutable and cannot be updated.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("AdminAction is immutable and cannot be deleted.")
+
+    def __str__(self):
+        return f"{self.action} {self.object_type}:{self.object_id}"

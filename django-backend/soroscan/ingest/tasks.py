@@ -2,6 +2,7 @@
 Celery tasks for SoroScan background processing.
 """
 import cProfile
+import base64
 import hashlib
 import hmac
 import io
@@ -15,12 +16,15 @@ from typing import Any
 import jsonschema
 import requests
 from celery import shared_task
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from celery.signals import task_postrun, task_prerun
 from django.conf import settings
 from django.db.models import F
 from django.utils import timezone
 
-from .models import ContractABI, ContractEvent, TrackedContract, WebhookSubscription, IndexerState, EventSchema
+from .models import ContractABI, ContractEvent, ContractSigningKey, TrackedContract, WebhookSubscription, IndexerState, EventSchema
 from .stellar_client import SorobanClient
 
 logger = logging.getLogger(__name__)
@@ -118,6 +122,136 @@ def _extract_event_index(event: Any, fallback_index: int = 0) -> int:
     return fallback_index
 
 
+def _decode_key_or_sig(value: Any) -> bytes | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.startswith("0x"):
+        raw = raw[2:]
+
+    if len(raw) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in raw):
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            pass
+
+    try:
+        return base64.b64decode(raw, validate=True)
+    except Exception:
+        return raw.encode("utf-8")
+
+
+def _extract_signature(event: Any, payload: dict[str, Any]) -> Any:
+    return (
+        _event_attr(event, "signature", "event_signature")
+        or payload.get("signature")
+        or payload.get("event_signature")
+        or payload.get("sig")
+    )
+
+
+def _message_for_signature(event: Any, payload: dict[str, Any]) -> bytes:
+    payload_hash = _event_attr(event, "payload_hash") or payload.get("payload_hash")
+    payload_hash_bytes = _decode_key_or_sig(payload_hash)
+    if payload_hash_bytes:
+        return payload_hash_bytes
+
+    # Build canonical payload bytes excluding signature metadata fields.
+    signing_payload = {
+        k: v
+        for k, v in payload.items()
+        if k not in {"signature", "event_signature", "sig"}
+    }
+    return json.dumps(signing_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _load_signing_public_key(key: ContractSigningKey):
+    value = (key.public_key or "").strip()
+    if not value:
+        return None
+
+    if "-----BEGIN" in value:
+        return serialization.load_pem_public_key(value.encode("utf-8"))
+
+    key_bytes = _decode_key_or_sig(value)
+    if not key_bytes:
+        return None
+
+    if key.algorithm == ContractSigningKey.Algorithm.ED25519:
+        return ed25519.Ed25519PublicKey.from_public_bytes(key_bytes)
+
+    # ECDSA flexibility: accept uncompressed points for common curves.
+    for curve in (ec.SECP256R1(), ec.SECP256K1()):
+        try:
+            return ec.EllipticCurvePublicKey.from_encoded_point(curve, key_bytes)
+        except ValueError:
+            continue
+    return None
+
+
+def resolve_signature_status(
+    contract: TrackedContract,
+    event: Any,
+    payload: dict[str, Any],
+) -> str:
+    """
+    Return one of: valid, invalid, missing.
+
+    Verification never raises and never blocks ingest.
+    """
+    signing_key = (
+        ContractSigningKey.objects.filter(contract=contract, is_active=True)
+        .only("algorithm", "public_key")
+        .first()
+    )
+    if signing_key is None:
+        return "missing"
+
+    signature_value = _extract_signature(event, payload)
+    signature = _decode_key_or_sig(signature_value)
+    if not signature:
+        return "missing"
+
+    message = _message_for_signature(event, payload)
+
+    try:
+        public_key = _load_signing_public_key(signing_key)
+        if public_key is None:
+            logger.warning(
+                "Signing key not usable for contract=%s",
+                contract.contract_id,
+                extra={"contract_id": contract.contract_id},
+            )
+            return "invalid"
+
+        if signing_key.algorithm == ContractSigningKey.Algorithm.ED25519:
+            public_key.verify(signature, message)
+        else:
+            public_key.verify(signature, message, ec.ECDSA(hashes.SHA256()))
+
+        return "valid"
+    except InvalidSignature:
+        logger.warning(
+            "Invalid event signature for contract=%s",
+            contract.contract_id,
+            extra={"contract_id": contract.contract_id},
+        )
+        return "invalid"
+    except Exception:
+        logger.warning(
+            "Event signature verification error for contract=%s",
+            contract.contract_id,
+            extra={"contract_id": contract.contract_id},
+            exc_info=True,
+        )
+        return "invalid"
+
+
 def _upsert_contract_event(
     contract: TrackedContract,
     event: Any,
@@ -131,6 +265,7 @@ def _upsert_contract_event(
     event_type = str(_event_attr(event, "type", "event_type", default="unknown") or "unknown")
     payload = _event_attr(event, "value", "payload", default={}) or {}
     raw_xdr = str(_event_attr(event, "xdr", "raw_xdr", default="") or "")
+    signature_status = resolve_signature_status(contract, event, payload)
 
     timestamp = _event_attr(event, "timestamp", default=timezone.now())
     if isinstance(timestamp, datetime) and timezone.is_naive(timestamp):
@@ -148,6 +283,7 @@ def _upsert_contract_event(
             "payload": payload,
             "timestamp": timestamp,
             "raw_xdr": raw_xdr,
+            "signature_status": signature_status,
         },
     )
     obj, created = result
@@ -609,6 +745,11 @@ def sync_events_from_horizon() -> int:
             )
             validation_status = "passed" if passed else "failed"
             schema_version = version_used
+            signature_status = resolve_signature_status(
+                contract,
+                event,
+                payload,
+            )
 
             event_record, created = ContractEvent.objects.get_or_create(
                 tx_hash=event.tx_hash,
@@ -621,6 +762,7 @@ def sync_events_from_horizon() -> int:
                     "raw_xdr": event.xdr if hasattr(event, "xdr") else "",
                     "validation_status": validation_status,
                     "schema_version": schema_version,
+                    "signature_status": signature_status,
                 },
             )
             
@@ -629,10 +771,12 @@ def sync_events_from_horizon() -> int:
                 if (
                     event_record.validation_status != validation_status
                     or event_record.schema_version != schema_version
+                    or event_record.signature_status != signature_status
                 ):
                     event_record.validation_status = validation_status
                     event_record.schema_version = schema_version
-                    event_record.save(update_fields=["validation_status", "schema_version"])
+                    event_record.signature_status = signature_status
+                    event_record.save(update_fields=["validation_status", "schema_version", "signature_status"])
 
             if created:
                 new_events += 1
@@ -769,6 +913,38 @@ def backfill_contract_events(
         m.task_duration_seconds.labels(
             task_name="backfill_contract_events"
         ).observe(time.monotonic() - _start)
+
+
+@shared_task(bind=True, queue="backfill")
+def reprocess_events(
+    self,
+    contract_id: str,
+    dry_run: bool = False,
+    batch_size: int = 500,
+    checkpoint_id: int = 0,
+    rollback_on_error: bool = True,
+) -> dict[str, Any]:
+    """Reprocess historical events for a contract in batches."""
+    from .reprocessing import reprocess_contract_events  # noqa: PLC0415
+
+    result = reprocess_contract_events(
+        contract_id,
+        dry_run=dry_run,
+        batch_size=batch_size,
+        checkpoint_id=checkpoint_id,
+        rollback_on_error=rollback_on_error,
+    )
+    return {
+        "contract_id": result.contract_id,
+        "total_events": result.total_events,
+        "processed_events": result.processed_events,
+        "updated_events": result.updated_events,
+        "failed_events": result.failed_events,
+        "last_checkpoint_id": result.last_checkpoint_id,
+        "progress_percent": result.progress_percent,
+        "dry_run": result.dry_run,
+        "rolled_back": result.rolled_back,
+    }
 
 
 # ---------------------------------------------------------------------------

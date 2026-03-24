@@ -24,7 +24,7 @@ import requests as http_requests
 
 from soroscan.throttles import IngestRateThrottle
 
-from .models import APIKey, ContractEvent, ContractInvocation, TrackedContract, WebhookSubscription, ArchivedEventBatch
+from .models import APIKey, AdminAction, ContractEvent, ContractInvocation, TrackedContract, WebhookSubscription, ArchivedEventBatch
 from .serializers import (
     APIKeySerializer,
     ContractEventSerializer,
@@ -37,6 +37,23 @@ from .serializers import (
 from .stellar_client import SorobanClient
 
 logger = logging.getLogger(__name__)
+
+
+class AdminActionSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="user.username", read_only=True)
+
+    class Meta:
+        model = AdminAction
+        fields = [
+            "id",
+            "username",
+            "action",
+            "object_type",
+            "object_id",
+            "timestamp",
+            "ip_address",
+            "changes",
+        ]
 
 
 def _frontend_base_url() -> str:
@@ -124,7 +141,14 @@ class ContractEventViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ContractEvent.objects.all()
     serializer_class = ContractEventSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
-    filterset_fields = ["contract__contract_id", "event_type", "ledger", "validation_status", "decoding_status"]
+    filterset_fields = [
+        "contract__contract_id",
+        "event_type",
+        "ledger",
+        "validation_status",
+        "decoding_status",
+        "signature_status",
+    ]
     ordering_fields = ["timestamp", "ledger"]
     ordering = ["-timestamp"]
 
@@ -672,3 +696,55 @@ def restore_archived_events(request):
         {"status": "restored", "restored_count": restored_count, "batch_id": batch.id},
         status=status.HTTP_200_OK,
     )
+
+
+@extend_schema(
+    parameters=[
+        inline_serializer(
+            name="AuditTrailParams",
+            fields={
+                "action": serializers.CharField(required=False),
+                "object_type": serializers.CharField(required=False),
+                "object_id": serializers.CharField(required=False),
+                "user": serializers.CharField(required=False),
+                "since": serializers.DateTimeField(required=False),
+                "until": serializers.DateTimeField(required=False),
+                "limit": serializers.IntegerField(required=False),
+            },
+        )
+    ],
+    responses=AdminActionSerializer(many=True),
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def audit_trail_view(request):
+    """Query immutable admin audit trail entries."""
+    qs = AdminAction.objects.select_related("user").all().order_by("-timestamp")
+
+    action = request.query_params.get("action")
+    object_type = request.query_params.get("object_type")
+    object_id = request.query_params.get("object_id")
+    username = request.query_params.get("user")
+    since = request.query_params.get("since")
+    until = request.query_params.get("until")
+
+    if action:
+        qs = qs.filter(action=action)
+    if object_type:
+        qs = qs.filter(object_type=object_type)
+    if object_id:
+        qs = qs.filter(object_id=object_id)
+    if username:
+        qs = qs.filter(user__username=username)
+    if since:
+        qs = qs.filter(timestamp__gte=since)
+    if until:
+        qs = qs.filter(timestamp__lte=until)
+
+    try:
+        limit = max(1, min(int(request.query_params.get("limit", 100)), 1000))
+    except (TypeError, ValueError):
+        limit = 100
+
+    serializer = AdminActionSerializer(qs[:limit], many=True)
+    return Response(serializer.data)

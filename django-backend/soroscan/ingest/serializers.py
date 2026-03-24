@@ -60,6 +60,7 @@ class ContractEventSerializer(serializers.ModelSerializer):
             "tx_hash",
             "schema_version",
             "validation_status",
+            "signature_status",
         ]
         read_only_fields = [
             "id",
@@ -75,6 +76,7 @@ class ContractEventSerializer(serializers.ModelSerializer):
             "tx_hash",
             "schema_version",
             "validation_status",
+            "signature_status",
         ]
 
 
@@ -207,6 +209,7 @@ class EventSearchSerializer(serializers.ModelSerializer):
             "timestamp",
             "tx_hash",
             "validation_status",
+            "signature_status",
             "relevance_score",
         ]
         read_only_fields = fields

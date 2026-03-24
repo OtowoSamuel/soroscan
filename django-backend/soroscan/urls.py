@@ -15,6 +15,7 @@ from rest_framework_simplejwt.views import (
 )
 
 from soroscan.graphql_views import ThrottledGraphQLView
+from soroscan.ingest.views import audit_trail_view
 from soroscan.ingest.schema import schema
 
 urlpatterns = [
@@ -23,6 +24,7 @@ urlpatterns = [
     path("", include("django_prometheus.urls")),
 
     path("admin/", admin.site.urls),
+    path("api/audit-trail/", audit_trail_view, name="audit-trail"),
     path("api/ingest/", include("soroscan.ingest.urls")),
     path("graphql/", ThrottledGraphQLView.as_view(schema=schema)),
     # JWT Authentication

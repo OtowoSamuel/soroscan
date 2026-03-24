@@ -68,6 +68,7 @@ class EventType:
     tx_hash: auto
     schema_version: auto
     validation_status: auto
+    signature_status: auto
 
     @strawberry.field
     def contract_id(self) -> str:
@@ -277,6 +278,7 @@ class Query:
         self,
         contract_id: Optional[str] = None,
         event_type: Optional[str] = None,
+        signature_status: Optional[str] = None,
         ledger_min: Optional[int] = None,
         ledger_max: Optional[int] = None,
         first: int = 20,
@@ -291,6 +293,10 @@ class Query:
             qs = qs.filter(contract__contract_id=contract_id)
         if event_type:
             qs = qs.filter(event_type=event_type)
+        if signature_status is not None:
+            normalized_signature_status = signature_status.lower()
+            if normalized_signature_status in {"valid", "invalid", "missing"}:
+                qs = qs.filter(signature_status=normalized_signature_status)
         if ledger_min is not None:
             qs = qs.filter(ledger__gte=ledger_min)
         if ledger_max is not None:
