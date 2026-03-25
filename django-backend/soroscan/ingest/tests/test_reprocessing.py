@@ -1,7 +1,7 @@
 import pytest
 from django.core.exceptions import ObjectDoesNotExist
 
-from soroscan.ingest.models import AdminAction, ContractEvent
+from soroscan.ingest.models import AdminAction
 from soroscan.ingest.reprocessing import _progress, reprocess_contract_events
 
 from .factories import ContractEventFactory, TrackedContractFactory
