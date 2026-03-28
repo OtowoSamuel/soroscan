@@ -96,6 +96,12 @@ class TrackedContract(models.Model):
         help_text="Stellar contract address (C...)",
     )
     name = models.CharField(max_length=100, help_text="Human-readable contract name")
+    alias = models.CharField(
+        max_length=256,
+        blank=True,
+        default="",
+        help_text="Optional friendly name/alias for easier identification (e.g. 'Token Transfer Contract')",
+    )
     description = models.TextField(blank=True, help_text="Optional description")
     owner = models.ForeignKey(
         User,
@@ -146,10 +152,16 @@ class TrackedContract(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["contract_id", "is_active"]),
+            models.Index(fields=["alias"]),
         ]
 
     def __str__(self):
-        return f"{self.name} ({self.contract_id[:8]}...)"
+        display = self.alias or self.name
+        return f"{display} ({self.contract_id[:8]}...)"
+
+    def display_name(self) -> str:
+        """Return alias if set, otherwise contract_id."""
+        return self.alias if self.alias else self.contract_id
 
     def deprecation_warning(self) -> dict[str, str] | None:
         if self.deprecation_status == self.DeprecationStatus.ACTIVE:

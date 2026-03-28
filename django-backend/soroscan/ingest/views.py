@@ -92,8 +92,8 @@ class TrackedContractViewSet(viewsets.ModelViewSet):
     serializer_class = TrackedContractSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ["is_active"]
-    search_fields = ["name", "contract_id"]
-    ordering_fields = ["created_at", "name"]
+    search_fields = ["name", "alias", "contract_id"]
+    ordering_fields = ["created_at", "name", "alias"]
     ordering = ["-created_at"]
 
     @staticmethod

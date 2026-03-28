@@ -10,14 +10,14 @@ from typing import AsyncGenerator, Optional
 import strawberry
 import strawberry_django
 from channels.layers import get_channel_layer
+from django.db.models import Case, Count, IntegerField, Max, Value, When
+from django.utils import timezone
 from strawberry import auto
 from strawberry.types import Info
 
 from .cache_utils import get_or_set_json, query_cache_ttl, stable_cache_key
 from .models import ContractEvent, ContractInvocation, Notification, TrackedContract, WebhookDeliveryLog
 from .services.timeline import build_timeline
-from django.utils import timezone
-from django.db.models import Count, Max
 
 
 def _get_authenticated_user(info: Info):
@@ -46,6 +46,7 @@ class ContractType:
     id: auto
     contract_id: auto
     name: auto
+    alias: auto
     description: auto
     is_active: auto
     deprecation_status: auto
@@ -308,11 +309,21 @@ class NotificationType:
 @strawberry.type
 class Query:
     @strawberry.field
-    def contracts(self, is_active: Optional[bool] = None) -> list[ContractType]:
-        """Get all tracked contracts."""
+    def contracts(self, is_active: Optional[bool] = None, alias: Optional[str] = None) -> list[ContractType]:
+        """Get all tracked contracts. Optionally filter by alias substring. Sorted by alias when set."""
         qs = TrackedContract.objects.all()
         if is_active is not None:
             qs = qs.filter(is_active=is_active)
+        if alias is not None:
+            qs = qs.filter(alias__icontains=alias)
+        # Sort: contracts with an alias come first (alphabetically), then by -created_at
+        qs = qs.annotate(
+            _has_alias=Case(
+                When(alias="", then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        ).order_by("_has_alias", "alias", "-created_at")
         return qs
 
     @strawberry.field
@@ -723,6 +734,7 @@ class Mutation:
         name: Optional[str] = None,
         description: Optional[str] = None,
         is_active: Optional[bool] = None,
+        alias: Optional[str] = None,
     ) -> Optional[ContractType]:
         """Update a tracked contract."""
         user = _get_authenticated_user(info)
@@ -740,6 +752,8 @@ class Mutation:
             contract.description = description
         if is_active is not None:
             contract.is_active = is_active
+        if alias is not None:
+            contract.alias = alias
 
         contract.save()
 

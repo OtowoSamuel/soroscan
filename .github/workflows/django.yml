@@ -57,28 +57,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: Run migrations
-        working-directory: ./django-backend
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/soroscan_test
-          REDIS_URL: redis://localhost:6379/0
-          SECRET_KEY: test-secret-key-for-ci
-          DEBUG: 'False'
-          DJANGO_SETTINGS_MODULE: soroscan.settings_test
-        run: |
-          python manage.py migrate --noinput
-      
-      - name: Run tests
-        working-directory: ./django-backend
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/soroscan_test
-          REDIS_URL: redis://localhost:6379/0
-          SECRET_KEY: test-secret-key-for-ci
-          DEBUG: 'False'
-          DJANGO_SETTINGS_MODULE: soroscan.settings_test
-        run: |
-          python manage.py test
-      
       - name: Run pytest with coverage
         working-directory: ./django-backend
         env:

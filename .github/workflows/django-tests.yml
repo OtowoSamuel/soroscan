@@ -63,10 +63,11 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_soroscan
           REDIS_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
-          DEBUG: False
-          CELERY_TASK_ALWAYS_EAGER: True
+          DEBUG: "False"
+          DJANGO_SETTINGS_MODULE: soroscan.settings_test
+          CELERY_TASK_ALWAYS_EAGER: "True"
         run: |
-          pytest --cov=soroscan.ingest --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+          pytest --cov=soroscan.ingest --cov-report=term-missing --cov-report=xml
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v3

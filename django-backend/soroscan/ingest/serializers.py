@@ -69,6 +69,7 @@ class TrackedContractSerializer(serializers.ModelSerializer):
             "id",
             "contract_id",
             "name",
+            "alias",
             "description",
             "abi_schema",
             "is_active",

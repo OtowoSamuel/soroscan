@@ -28,7 +28,8 @@ class TrackedContractFactory(DjangoModelFactory):
     class Meta:
         model = TrackedContract
 
-    contract_id = factory.Sequence(lambda n: f"C{str(n).zfill(55)}{'A' * (55 - len(str(n)))}")
+    # Keep factory data aligned with the model's 56-character contract_id limit.
+    contract_id = factory.Sequence(lambda n: f"C{str(n).zfill(55)}")
     name = factory.Sequence(lambda n: f"Contract {n}")
     description = "Test contract"
     owner = factory.SubFactory(UserFactory)
