@@ -227,6 +227,9 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ROUTES = {
+    "ingest.tasks.ingest_latest_events": {"queue": "high_priority"},
+    "ingest.tasks.dispatch_webhook": {"queue": "default"},
+    "ingest.tasks.aggregate_event_statistics": {"queue": "low_priority"},
     "soroscan.ingest.tasks.backfill_contract_events": {"queue": "backfill"},
     "soroscan.ingest.tasks.evaluate_remediation_rules": {"queue": "default"},
 }
@@ -252,6 +255,10 @@ CELERY_BEAT_SCHEDULE = {
     "evaluate-remediation-rules": {
         "task": "soroscan.ingest.tasks.evaluate_remediation_rules",
         "schedule": 300,  # every 5 minutes
+    },
+    "aggregate-event-statistics": {
+        "task": "ingest.tasks.aggregate_event_statistics",
+        "schedule": 3600,  # hourly
     },
 }
 

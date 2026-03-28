@@ -63,12 +63,78 @@ services:
     stdin_open: true
     tty: true
 
-  worker:
+  worker-high:
     build:
       context: ./django-backend
       dockerfile: Dockerfile
-    container_name: soroscan-worker
-    command: celery -A soroscan worker --loglevel=info --concurrency=2
+    container_name: soroscan-worker-high
+    command: celery -A soroscan worker --loglevel=info --concurrency=4 --queues=high_priority
+    volumes:
+      - ./django-backend:/app
+    env_file:
+      - ./django-backend/.env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/soroscan
+      - REDIS_URL=redis://redis:6379/0
+      - DEBUG=True
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - soroscan-network
+
+  worker-default:
+    build:
+      context: ./django-backend
+      dockerfile: Dockerfile
+    container_name: soroscan-worker-default
+    command: celery -A soroscan worker --loglevel=info --concurrency=2 --queues=default
+    volumes:
+      - ./django-backend:/app
+    env_file:
+      - ./django-backend/.env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/soroscan
+      - REDIS_URL=redis://redis:6379/0
+      - DEBUG=True
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - soroscan-network
+
+  worker-low:
+    build:
+      context: ./django-backend
+      dockerfile: Dockerfile
+    container_name: soroscan-worker-low
+    command: celery -A soroscan worker --loglevel=info --concurrency=2 --queues=low_priority
+    volumes:
+      - ./django-backend:/app
+    env_file:
+      - ./django-backend/.env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/soroscan
+      - REDIS_URL=redis://redis:6379/0
+      - DEBUG=True
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - soroscan-network
+
+  worker-backfill:
+    build:
+      context: ./django-backend
+      dockerfile: Dockerfile
+    container_name: soroscan-worker-backfill
+    command: celery -A soroscan worker --loglevel=info --concurrency=1 --queues=backfill
     volumes:
       - ./django-backend:/app
     env_file:

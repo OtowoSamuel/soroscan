@@ -238,8 +238,8 @@ class ActiveContractsGaugeTest(TestCase):
         expected = TrackedContract.objects.filter(is_active=True).count()
         self.assertEqual(self._gauge_value(), expected)
 
-    def test_gauge_updated_by_sync_task(self):
-        """sync_events_from_horizon should call active_contracts_gauge.set()."""
+    def test_gauge_updated_by_ingest_latest_events(self):
+        """ingest_latest_events should call active_contracts_gauge.set()."""
         from soroscan.ingest import metrics as m
 
         with patch.object(m.active_contracts_gauge, "set") as mock_set, \
@@ -249,8 +249,8 @@ class ActiveContractsGaugeTest(TestCase):
             mock_server.get_events.return_value = MagicMock(events=[])
             mock_server_cls.return_value = mock_server
 
-            from soroscan.ingest.tasks import sync_events_from_horizon
-            sync_events_from_horizon()
+            from soroscan.ingest.tasks import ingest_latest_events
+            ingest_latest_events()
 
         mock_set.assert_called()
 
@@ -268,16 +268,16 @@ class TaskDurationHistogramTest(TestCase):
             labels={"task_name": task_name},
         )
 
-    def test_sync_events_observes_histogram(self):
+    def test_ingest_latest_events_observes_histogram(self):
         with patch("stellar_sdk.SorobanServer") as mock_server_cls:
             mock_server = MagicMock()
             mock_server.get_events.return_value = MagicMock(events=[])
             mock_server_cls.return_value = mock_server
 
-            before = self._histogram_count("sync_events_from_horizon")
-            from soroscan.ingest.tasks import sync_events_from_horizon
-            sync_events_from_horizon()
-            after = self._histogram_count("sync_events_from_horizon")
+            before = self._histogram_count("ingest_latest_events")
+            from soroscan.ingest.tasks import ingest_latest_events
+            ingest_latest_events()
+            after = self._histogram_count("ingest_latest_events")
 
         self.assertGreater(after, before)
 

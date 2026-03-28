@@ -427,6 +427,7 @@ def validate_event_payload(
 
 
 @shared_task(
+    name="ingest.tasks.dispatch_webhook",
     bind=True,
     autoretry_for=(requests.exceptions.RequestException,),
     retry_backoff=True,
@@ -799,8 +800,8 @@ def process_new_event(event_data: dict[str, Any]) -> None:
     )
 
 
-@shared_task
-def sync_events_from_horizon() -> int:
+@shared_task(name="ingest.tasks.ingest_latest_events")
+def ingest_latest_events() -> int:
     """
     Sync events from Horizon/Soroban RPC.
     """
@@ -956,10 +957,40 @@ def sync_events_from_horizon() -> int:
     finally:
         # Always record duration, even if an exception occurred.
         m.task_duration_seconds.labels(
-            task_name="sync_events_from_horizon"
+            task_name="ingest_latest_events"
         ).observe(time.monotonic() - _start)
 
     return new_events
+
+
+@shared_task(name="ingest.tasks.aggregate_event_statistics")
+def aggregate_event_statistics() -> dict[str, Any]:
+    """
+    Perform analytics aggregation on ingested events (Low Priority).
+    """
+    _start = time.monotonic()
+    m = _get_metrics()
+    
+    # Placeholder for actual aggregation logic
+    total_events = ContractEvent.objects.count()
+    active_contracts = TrackedContract.objects.filter(is_active=True).count()
+    
+    logger.info(
+        "Aggregated statistics: %d events across %d contracts",
+        total_events,
+        active_contracts,
+        extra={"total_events": total_events, "active_contracts": active_contracts},
+    )
+    
+    m.task_duration_seconds.labels(
+        task_name="aggregate_event_statistics"
+    ).observe(time.monotonic() - _start)
+    
+    return {
+        "total_events": total_events,
+        "active_contracts": active_contracts,
+        "timestamp": timezone.now().isoformat(),
+    }
 
 
 @shared_task(bind=True, queue="backfill", max_retries=3, default_retry_delay=60)
