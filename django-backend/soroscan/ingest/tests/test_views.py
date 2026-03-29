@@ -435,3 +435,160 @@ class TestEventExplorerPageView:
         response = api_client.get(url)
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_contract_event_types_endpoint(self, api_client, contract):
+        # Create events with different types
+        ContractEventFactory(contract=contract, event_type="transfer")
+        ContractEventFactory(contract=contract, event_type="transfer")
+        ContractEventFactory(contract=contract, event_type="swap")
+        
+        url = reverse("contract-event-types", args=[contract.contract_id])
+        response = api_client.get(url)
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        
+        # Should have 2 event types
+        assert len(data) == 2
+        
+        # Should be sorted by count (descending)
+        assert data[0]["event_type"] == "transfer"
+        assert data[0]["count"] == 2
+        assert data[1]["event_type"] == "swap"
+        assert data[1]["count"] == 1
+        
+        # Should have timestamps
+        assert "first_seen" in data[0]
+        assert "last_seen" in data[0]
+        assert "first_seen" in data[1]
+        assert "last_seen" in data[1]
+
+    def test_contract_event_types_missing_contract_returns_404(self, api_client):
+        url = reverse("contract-event-types", args=["C" + "A" * 55])
+        response = api_client.get(url)
+        
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_admin_ingest_errors_requires_staff(self, api_client, user):
+        api_client.force_authenticate(user=user)
+        url = reverse("admin-ingest-errors")
+        response = api_client.get(url)
+        
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_admin_ingest_errors_success(self, api_client):
+        from soroscan.ingest.models import IngestError
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        admin_user = User.objects.create_user(username="admin", is_staff=True)
+        api_client.force_authenticate(user=admin_user)
+        
+        # Create test errors
+        IngestError.objects.create(
+            error_type="decode_error",
+            contract_id="CTEST123",
+            error_message="Failed to decode XDR",
+            ledger=1000,
+        )
+        IngestError.objects.create(
+            error_type="decode_error", 
+            contract_id="CTEST123",
+            error_message="Another decode error",
+            ledger=1001,
+        )
+        IngestError.objects.create(
+            error_type="validation_error",
+            contract_id="CTEST456", 
+            error_message="Schema validation failed",
+            ledger=1002,
+        )
+        
+        url = reverse("admin-ingest-errors")
+        response = api_client.get(url)
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        
+        # Should have 2 groups (by error_type + contract_id)
+        assert len(data) == 2
+        
+        # Should be sorted by count (descending)
+        assert data[0]["count"] == 2
+        assert data[0]["error_type"] == "decode_error"
+        assert data[0]["contract_id"] == "CTEST123"
+        assert "last_occurrence" in data[0]
+        assert "sample_error" in data[0]
+        
+        assert data[1]["count"] == 1
+        assert data[1]["error_type"] == "validation_error"
+        assert data[1]["contract_id"] == "CTEST456"
+
+
+class TestEventCountCaching:
+    def test_event_count_cache_hit_on_second_request(self, contract):
+        from soroscan.ingest.cache_utils import get_event_count
+        from soroscan.ingest.tests.factories import ContractEventFactory
+        from django.core.cache import cache
+        
+        # Clear cache
+        cache.clear()
+        
+        # Create some events
+        ContractEventFactory.create_batch(5, contract=contract)
+        
+        # First call should be cache miss
+        count1 = get_event_count(contract.contract_id)
+        assert count1 == 5
+        
+        # Second call should be cache hit
+        count2 = get_event_count(contract.contract_id)
+        assert count2 == 5
+        
+        # Verify it's cached
+        cached_value = cache.get(f"event_count:{contract.contract_id}")
+        assert cached_value == 5
+
+    def test_event_count_cache_invalidation_on_new_event(self, contract):
+        from soroscan.ingest.cache_utils import get_event_count, invalidate_event_count_cache
+        from soroscan.ingest.tests.factories import ContractEventFactory
+        from django.core.cache import cache
+        
+        # Clear cache
+        cache.clear()
+        
+        # Create initial events and cache the count
+        ContractEventFactory.create_batch(3, contract=contract)
+        count1 = get_event_count(contract.contract_id)
+        assert count1 == 3
+        
+        # Verify cached
+        assert cache.get(f"event_count:{contract.contract_id}") == 3
+        
+        # Invalidate cache (simulating new event creation)
+        invalidate_event_count_cache(contract.contract_id)
+        
+        # Cache should be cleared
+        assert cache.get(f"event_count:{contract.contract_id}") is None
+        
+        # Create another event and get fresh count
+        ContractEventFactory(contract=contract)
+        count2 = get_event_count(contract.contract_id)
+        assert count2 == 4
+
+    def test_event_count_ttl_respected(self, contract):
+        from soroscan.ingest.cache_utils import get_event_count
+        from soroscan.ingest.tests.factories import ContractEventFactory
+        from django.core.cache import cache
+        from unittest.mock import patch
+        
+        # Clear cache
+        cache.clear()
+        
+        # Create events
+        ContractEventFactory.create_batch(2, contract=contract)
+        
+        # Mock cache.set to verify TTL
+        with patch.object(cache, 'set') as mock_set:
+            get_event_count(contract.contract_id)
+            mock_set.assert_called_once_with(f"event_count:{contract.contract_id}", 2, 300)

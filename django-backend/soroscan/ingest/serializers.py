@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from django.utils.text import slugify
 
+from .cache_utils import get_event_count
 from .models import APIKey, ContractEvent, ContractInvocation, Team, TeamMembership, TrackedContract, WebhookSubscription
 
 
@@ -89,7 +90,7 @@ class TrackedContractSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "last_indexed_ledger", "event_count", "last_event_at", "warnings", "created_at", "updated_at"]
 
     def get_event_count(self, obj) -> int:
-        return obj.events.count()
+        return get_event_count(obj.contract_id)
 
     def get_warnings(self, obj) -> list[dict[str, str]]:
         warning = obj.deprecation_warning()
@@ -181,7 +182,7 @@ class ContractInvocationSerializer(serializers.ModelSerializer):
 
     def get_events_count(self, obj) -> int:
         """Return count of related events."""
-        return obj.events.count()
+        return get_event_count(obj.contract_id)
 
 
 class WebhookSubscriptionSerializer(serializers.ModelSerializer):

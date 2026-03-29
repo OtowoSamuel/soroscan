@@ -1196,3 +1196,56 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"[{self.notification_type}] {self.title} → {self.user}"
+
+
+class IngestError(models.Model):
+    """
+    Tracks ingestion errors for admin visibility.
+    """
+    
+    class ErrorType(models.TextChoices):
+        DECODE_ERROR = "decode_error", "Decode Error"
+        VALIDATION_ERROR = "validation_error", "Validation Error"
+        RPC_ERROR = "rpc_error", "RPC Error"
+    
+    error_type = models.CharField(
+        max_length=32,
+        choices=ErrorType.choices,
+        db_index=True,
+    )
+    contract_id = models.CharField(
+        max_length=56,
+        db_index=True,
+        help_text="Contract that caused the error",
+    )
+    error_message = models.TextField(help_text="Full error message")
+    sample_error = models.CharField(
+        max_length=500,
+        help_text="Truncated error message for display",
+    )
+    ledger = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        help_text="Ledger where error occurred",
+    )
+    tx_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Transaction hash if available",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["error_type", "contract_id", "created_at"]),
+            models.Index(fields=["created_at"]),
+        ]
+    
+    def save(self, *args, **kwargs):
+        if not self.sample_error:
+            self.sample_error = self.error_message[:500]
+        super().save(*args, **kwargs)
+    
+    def __str__(self):
+        return f"{self.error_type}: {self.contract_id} at {self.created_at}"

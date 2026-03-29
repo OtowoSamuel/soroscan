@@ -7,7 +7,7 @@ multiple times without raising ``ValueError: Duplicated timeseries``.
 """
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
-_all__ = [
+__all__ = [
     # original
     "events_ingested_total",
     "task_duration_seconds",
@@ -27,6 +27,8 @@ _all__ = [
     "events_rate_limited_total",
     "events_filtered_total",
     "webhook_payload_bytes",
+    "cache_hits_total",
+    "cache_misses_total",
 ]
 
 
@@ -183,4 +185,18 @@ webhook_payload_bytes = _get_or_create(
     "soroscan_webhook_payload_bytes",
     "Size of webhook payload in bytes",
     ["contract_id"],
+)
+
+cache_hits_total = _get_or_create(
+    Counter,
+    "soroscan_cache_hits_total",
+    "Total number of cache hits",
+    ["cache_type"],
+)
+
+cache_misses_total = _get_or_create(
+    Counter,
+    "soroscan_cache_misses_total",
+    "Total number of cache misses",
+    ["cache_type"],
 )

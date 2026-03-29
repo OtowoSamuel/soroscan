@@ -24,6 +24,7 @@ from .models import (
     DataRetentionPolicy,
     EventSchema,
     IndexerState,
+    IngestError,
     RemediationIncident,
     RemediationRule,
     Team,
@@ -869,5 +870,20 @@ class AdminActionAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(IngestError)
+class IngestErrorAdmin(admin.ModelAdmin):
+    list_display = ["created_at", "error_type", "contract_id", "sample_error", "ledger"]
+    list_filter = ["error_type", "created_at"]
+    search_fields = ["contract_id", "error_message", "tx_hash"]
+    readonly_fields = ["created_at", "sample_error"]
+    ordering = ["-created_at"]
+    
+    def has_add_permission(self, request):
+        return False
+    
+    def has_change_permission(self, request, obj=None):
         return False
 

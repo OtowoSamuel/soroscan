@@ -8,7 +8,7 @@ import logging
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max, Min, Q
 from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
@@ -31,6 +31,7 @@ from .models import (
     AdminAction,
     ContractEvent,
     ContractInvocation,
+    IngestError,
     Team,
     TeamMembership,
     TrackedContract,
@@ -741,6 +742,30 @@ def contract_event_explorer_view(request, contract_id: str):
     return redirect(f"{frontend_base}/contracts/{contract.contract_id}/events/explorer")
 
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def contract_event_types_view(request, contract_id: str):
+    """Get event types and their counts for a specific contract."""
+    contract = get_object_or_404(TrackedContract, contract_id=contract_id)
+    
+    cache_key = stable_cache_key("contract_event_types", {"contract_id": contract_id})
+    
+    def _build():
+        return list(
+            ContractEvent.objects.filter(contract=contract)
+            .values("event_type")
+            .annotate(
+                count=Count("id"),
+                first_seen=Min("timestamp"),
+                last_seen=Max("timestamp")
+            )
+            .order_by("-count")
+        )
+    
+    result = get_or_set_json(cache_key, 60, _build)
+    return Response(result)
+
+
 @extend_schema(
     parameters=[
         inline_serializer(
@@ -902,3 +927,28 @@ def audit_trail_view(request):
 
     serializer = AdminActionSerializer(qs[:limit], many=True)
     return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_ingest_errors_view(request):
+    """Get recent ingest errors (admin only)."""
+    if not request.user.is_staff:
+        return Response({"error": "Admin access required"}, status=status.HTTP_403_FORBIDDEN)
+    
+    # Last 24 hours
+    since = timezone.now() - timezone.timedelta(hours=24)
+    
+    # Group by error_type + contract_id and aggregate
+    errors = (
+        IngestError.objects.filter(created_at__gte=since)
+        .values("error_type", "contract_id")
+        .annotate(
+            count=Count("id"),
+            last_occurrence=Max("created_at"),
+            sample_error=Max("sample_error")  # Get one sample error message
+        )
+        .order_by("-count")
+    )
+    
+    return Response(list(errors))

@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import IO, Iterator
 
+from soroscan.ingest.cache_utils import invalidate_event_count_cache
 from soroscan.ingest.models import ContractEvent, TrackedContract
 
 logger = logging.getLogger(__name__)
@@ -297,6 +298,10 @@ def _import_batch(batch: list[dict], contracts: dict, result: ImportResult, dry_
     before = ContractEvent.objects.filter(contract_id__in=contract_pks).count()
     ContractEvent.objects.bulk_create(events, ignore_conflicts=True)
     after = ContractEvent.objects.filter(contract_id__in=contract_pks).count()
+
+    # Invalidate event count cache for affected contracts
+    for contract_id in contract_pks:
+        invalidate_event_count_cache(contract_id)
 
     actually_inserted = after - before
     result.imported += actually_inserted
