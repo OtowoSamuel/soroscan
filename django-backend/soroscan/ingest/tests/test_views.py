@@ -292,6 +292,40 @@ class TestWebhookSubscriptionViewSet:
         assert response.status_code == status.HTTP_204_NO_CONTENT
         assert not WebhookSubscription.objects.filter(id=webhook.id).exists()
 
+    def test_webhook_dry_run_uses_filter_condition(self, authenticated_client, contract):
+        webhook = WebhookSubscriptionFactory(
+            contract=contract,
+            filter_condition={
+                "op": "and",
+                "conditions": [
+                    {"op": "eq", "field": "event_type", "value": "transfer"},
+                    {"op": "gte", "field": "payload.amount", "value": 1000},
+                ],
+            },
+        )
+
+        url = reverse("webhook-dry-run", args=[webhook.id])
+        response = authenticated_client.post(
+            url,
+            {
+                "sample_event": {
+                    "event_type": "transfer",
+                    "payload": {"amount": 900},
+                }
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["matched"] is False
+
+    def test_webhook_dry_run_rejects_non_object_sample(self, authenticated_client, contract):
+        webhook = WebhookSubscriptionFactory(contract=contract)
+        url = reverse("webhook-dry-run", args=[webhook.id])
+        response = authenticated_client.post(url, {"sample_event": "bad"}, format="json")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
 
 @pytest.mark.django_db
 class TestRecordEventView:
@@ -392,6 +426,25 @@ class TestContractStatusView:
         second = authenticated_client.get(url)
         assert second.status_code == status.HTTP_200_OK
         assert second.data["total_events_indexed"] == 1
+
+
+@pytest.mark.django_db
+class TestRateLimitAnalyticsView:
+    def test_rate_limit_analytics_returns_metrics(self, authenticated_client, user):
+        from soroscan.ingest.models import APIKey
+        from soroscan.throttles import _BUCKET_TTL
+
+        key = APIKey.objects.create(user=user, name="Analytics Key", tier="free")
+        now_bucket = int(timezone.now().timestamp()) // _BUCKET_TTL
+        cache.set(f"soroscan_api_key_quota_history:{key.id}:{now_bucket}", 12, timeout=3600)
+
+        url = reverse("rate-limit-analytics")
+        response = authenticated_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["window_hours"] == 168
+        assert len(response.data["api_keys"]) == 1
+        assert response.data["api_keys"][0]["name"] == "Analytics Key"
 
 
 @pytest.mark.django_db

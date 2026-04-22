@@ -73,6 +73,7 @@ class TrackedContractSerializer(serializers.ModelSerializer):
             "alias",
             "description",
             "abi_schema",
+            "json_schema",
             "is_active",
             "deprecation_status",
             "deprecation_reason",
@@ -202,6 +203,8 @@ class WebhookSubscriptionSerializer(serializers.ModelSerializer):
             "event_type",
             "target_url",
             "is_active",
+            "signature_algorithm",
+            "filter_condition",
             "created_at",
             "last_triggered",
             "failure_count",
@@ -210,6 +213,44 @@ class WebhookSubscriptionSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "secret": {"write_only": True},
         }
+
+    def validate_filter_condition(self, value):
+        if value in (None, {}):
+            return value
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("filter_condition must be an object.")
+
+        allowed_ops = {"and", "or", "not", "eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "startswith", "regex"}
+
+        def _validate(node: dict):
+            if not isinstance(node, dict):
+                raise serializers.ValidationError("Each condition node must be an object.")
+            op = str(node.get("op", "")).lower()
+            if op not in allowed_ops:
+                raise serializers.ValidationError(f"Unsupported operator: {op}")
+
+            if op in {"and", "or"}:
+                conditions = node.get("conditions")
+                if not isinstance(conditions, list) or not conditions:
+                    raise serializers.ValidationError(f"'{op}' requires a non-empty conditions array.")
+                for sub in conditions:
+                    _validate(sub)
+                return
+
+            if op == "not":
+                condition = node.get("condition")
+                if not isinstance(condition, dict):
+                    raise serializers.ValidationError("'not' requires a condition object.")
+                _validate(condition)
+                return
+
+            if "field" not in node:
+                raise serializers.ValidationError(f"'{op}' requires a field.")
+            if "value" not in node:
+                raise serializers.ValidationError(f"'{op}' requires a value.")
+
+        _validate(value)
+        return value
 
 
 class RecordEventRequestSerializer(serializers.Serializer):

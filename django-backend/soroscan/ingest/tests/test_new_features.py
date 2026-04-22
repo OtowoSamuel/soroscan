@@ -78,6 +78,11 @@ class EvaluateConditionTests(TestCase):
         self.assertTrue(evaluate_condition(c, {"event_type": "swap"}))
         self.assertFalse(evaluate_condition(c, {"event_type": "mint"}))
 
+    def test_regex_operator(self):
+        c = {"op": "regex", "field": "event_type", "value": "^trans.*$"}
+        self.assertTrue(evaluate_condition(c, {"event_type": "transfer"}))
+        self.assertFalse(evaluate_condition(c, {"event_type": "mint"}))
+
     def test_and(self):
         c = {
             "op": "and",

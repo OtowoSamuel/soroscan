@@ -26,6 +26,7 @@ __all__ = [
     "ledgers_scanned_total",
     "events_rate_limited_total",
     "events_filtered_total",
+    "events_validation_failures_total",
     "webhook_payload_bytes",
     "cache_hits_total",
     "cache_misses_total",
@@ -179,6 +180,13 @@ events_filtered_total = _get_or_create(
     "soroscan_events_filtered_total",
     "Total number of events dropped by whitelist/blacklist filter",
     ["contract_id", "network", "filter_type", "event_type"],
+)
+
+events_validation_failures_total = _get_or_create(
+    Counter,
+    "soroscan_events_validation_failures_total",
+    "Total number of ingest events dropped due to contract-level JSON schema validation failures",
+    ["contract_id", "network"],
 )
 
 webhook_payload_bytes = _get_or_create(

@@ -20,6 +20,7 @@ from soroscan.ingest.tasks import (
     dispatch_webhook,
     evaluate_remediation_rules,
     process_new_event,
+    validate_contract_payload_schema,
     validate_event_payload,
 )
 
@@ -101,6 +102,22 @@ class TestValidateEventPayload:
 
         assert passed is True
         assert version is None
+
+
+@pytest.mark.django_db
+class TestValidateContractPayloadSchema:
+    def test_no_contract_schema_passes(self, contract):
+        assert validate_contract_payload_schema(contract, {"amount": 1}, "transfer") is True
+
+    def test_contract_schema_failure(self, contract):
+        contract.json_schema = {
+            "type": "object",
+            "properties": {"amount": {"type": "number"}},
+            "required": ["amount"],
+        }
+        contract.save(update_fields=["json_schema"])
+
+        assert validate_contract_payload_schema(contract, {"bad": 1}, "transfer") is False
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +223,17 @@ class TestDispatchWebhookHmac:
         ).hexdigest()
 
         assert sent_sig == f"sha256={expected_hex}"
+
+    @responses.activate
+    def test_signature_format_sha1_when_configured(self, webhook, event):
+        webhook.signature_algorithm = WebhookSubscription.SIGNATURE_SHA1
+        webhook.save(update_fields=["signature_algorithm"])
+        responses.add(responses.POST, webhook.target_url, status=200)
+
+        dispatch_webhook.apply(args=[webhook.id, event.id])
+
+        sig = responses.calls[0].request.headers["X-SoroScan-Signature"]
+        assert sig.startswith("sha1=")
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +565,37 @@ class TestProcessNewEvent:
         }
         result = process_new_event.apply(args=[event_data])
         assert result.successful()
+
+    @patch("soroscan.ingest.tasks.dispatch_webhook.delay")
+    def test_filter_condition_blocks_non_matching_webhook(self, mock_delay, contract):
+        event = ContractEventFactory(
+            contract=contract,
+            event_type="transfer",
+            ledger=8100,
+            event_index=0,
+            payload={"amount": 100},
+        )
+        WebhookSubscriptionFactory(
+            contract=contract,
+            event_type="transfer",
+            filter_condition={"op": "gt", "field": "payload.amount", "value": 1000},
+            is_active=True,
+            status=WebhookSubscription.STATUS_ACTIVE,
+        )
+
+        process_new_event.apply(
+            args=[
+                {
+                    "contract_id": contract.contract_id,
+                    "event_type": event.event_type,
+                    "payload": event.payload,
+                    "ledger": event.ledger,
+                    "event_index": event.event_index,
+                }
+            ]
+        )
+
+        mock_delay.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ HEADER_RESET = "X-RateLimit-Reset"
 
 # TTL of Redis counter bucket (1 hour)
 _BUCKET_TTL = 3600
+_HISTORY_TTL = 3600 * 24 * 8
 
 
 class APIKeyThrottle(BaseThrottle):
@@ -80,6 +81,8 @@ class APIKeyThrottle(BaseThrottle):
                 quota = min(quota, override)
 
         cache_key = self._cache_key(api_key.id)
+        bucket_hour = int(time.time()) // _BUCKET_TTL
+        history_key = f"{self.CACHE_PREFIX}_history:{api_key.id}:{bucket_hour}"
         count = cache.get(cache_key, 0)
         remaining = max(0, quota - count)
         reset_ts = self._next_reset()
@@ -98,6 +101,10 @@ class APIKeyThrottle(BaseThrottle):
         # Increment atomically via add+incr pattern
         if not cache.add(cache_key, 1, timeout=_BUCKET_TTL):
             cache.incr(cache_key)
+
+        # Keep an hourly history series for analytics dashboard windows.
+        if not cache.add(history_key, 1, timeout=_HISTORY_TTL):
+            cache.incr(history_key)
 
         # Stamp last_used_at without blocking request (fire-and-forget via ORM)
         from django.utils import timezone

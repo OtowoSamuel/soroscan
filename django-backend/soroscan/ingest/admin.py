@@ -151,7 +151,7 @@ class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
         ("Advanced", {
             "fields": (
                 "deprecation_status", "deprecation_reason",
-                "max_events_per_minute", "abi_schema",
+                "max_events_per_minute", "abi_schema", "json_schema",
                 "last_indexed_ledger",
             ),
             "classes": ("collapse",),
@@ -456,7 +456,7 @@ class WebhookSubscriptionAdmin(AdminAuditMixin, admin.ModelAdmin):
             "fields": ("contract", "target_url", "event_type", "is_active"),
         }),
         ("Configuration", {
-            "fields": ("timeout_seconds",),
+            "fields": ("timeout_seconds", "signature_algorithm", "filter_condition"),
         }),
         ("Retry Configuration", {
             "fields": ("retry_backoff_strategy", "retry_backoff_seconds"),

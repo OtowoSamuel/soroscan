@@ -122,6 +122,11 @@ class TrackedContract(models.Model):
         blank=True,
         help_text="Optional ABI/schema for decoding events",
     )
+    json_schema = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Optional JSON Schema used to validate ingested event payloads.",
+    )
     last_indexed_ledger = models.PositiveBigIntegerField(
         null=True,
         blank=True,
@@ -508,6 +513,13 @@ class WebhookSubscription(models.Model):
         (BACKOFF_FIXED, "Fixed (base seconds)"),
     ]
 
+    SIGNATURE_SHA256 = "sha256"
+    SIGNATURE_SHA1 = "sha1"
+    SIGNATURE_ALGORITHM_CHOICES = [
+        (SIGNATURE_SHA256, "SHA-256"),
+        (SIGNATURE_SHA1, "SHA-1 (legacy)"),
+    ]
+
     contract = models.ForeignKey(
         TrackedContract,
         on_delete=models.CASCADE,
@@ -550,6 +562,17 @@ class WebhookSubscription(models.Model):
         default=60,
         validators=[MinValueValidator(1), MaxValueValidator(3600)],
         help_text="Base seconds for backoff calculation (1-3600, default: 60)",
+    )
+    signature_algorithm = models.CharField(
+        max_length=16,
+        choices=SIGNATURE_ALGORITHM_CHOICES,
+        default=SIGNATURE_SHA256,
+        help_text="HMAC algorithm used for X-SoroScan-Signature header.",
+    )
+    filter_condition = models.JSONField(
+        blank=True,
+        null=True,
+        help_text="Optional JSON condition DSL used to route events to this webhook.",
     )
 
     class Meta:

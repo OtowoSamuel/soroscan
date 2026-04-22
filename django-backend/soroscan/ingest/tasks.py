@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import pstats
+import re
 import time
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import Any
@@ -222,6 +223,56 @@ def _message_for_signature(event: Any, payload: dict[str, Any]) -> bytes:
     return json.dumps(signing_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _build_webhook_signature_header(webhook: WebhookSubscription, payload_bytes: bytes) -> str:
+    algorithm = (webhook.signature_algorithm or WebhookSubscription.SIGNATURE_SHA256).lower()
+    if algorithm == WebhookSubscription.SIGNATURE_SHA1:
+        digestmod = hashlib.sha1
+        prefix = "sha1"
+    else:
+        digestmod = hashlib.sha256
+        prefix = "sha256"
+
+    sig_hex = hmac.new(
+        webhook.secret.encode("utf-8"),
+        msg=payload_bytes,
+        digestmod=digestmod,
+    ).hexdigest()
+    return f"{prefix}={sig_hex}"
+
+
+def validate_contract_payload_schema(
+    contract: TrackedContract,
+    payload: dict[str, Any],
+    event_type: str,
+    ledger: int | None = None,
+) -> bool:
+    """
+    Validate payload against ``TrackedContract.json_schema`` when configured.
+
+    Returns True when no schema is configured or payload passes validation.
+    """
+    if contract.json_schema in (None, {}):
+        return True
+
+    try:
+        jsonschema.validate(instance=payload, schema=contract.json_schema)
+        return True
+    except jsonschema.ValidationError as exc:
+        logger.error(
+            "Contract JSON schema validation failed for contract_id=%s event_type=%s ledger=%s: %s",
+            contract.contract_id,
+            event_type,
+            ledger,
+            exc.message,
+            extra={
+                "contract_id": contract.contract_id,
+                "event_type": event_type,
+                "ledger": ledger,
+            },
+        )
+        return False
+
+
 def _load_signing_public_key(key: ContractSigningKey):
     value = (key.public_key or "").strip()
     if not value:
@@ -350,6 +401,15 @@ def _upsert_contract_event(
         return (None, False)
 
     payload = _event_attr(event, "value", "payload", default={}) or {}
+
+    if not validate_contract_payload_schema(contract, payload, event_type, ledger=ledger):
+        m = _get_metrics()
+        m.events_validation_failures_total.labels(
+            contract_id=_short_contract_id(contract.contract_id),
+            network=_network_label(),
+        ).inc()
+        return (None, False)
+
     raw_xdr = str(_event_attr(event, "xdr", "raw_xdr", default="") or "")
     signature_status = resolve_signature_status(contract, event, payload)
 
@@ -553,15 +613,9 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
         contract_id=event.contract.contract_id,
     ).observe(payload_size)
 
-    sig_hex = hmac.new(
-        webhook.secret.encode("utf-8"),
-        msg=payload_bytes,
-        digestmod=hashlib.sha256,
-    ).hexdigest()
-
     headers = {
         "Content-Type": "application/json",
-        "X-SoroScan-Signature": f"sha256={sig_hex}",
+        "X-SoroScan-Signature": _build_webhook_signature_header(webhook, payload_bytes),
         "X-SoroScan-Timestamp": timezone.now().isoformat(),
     }
 
@@ -914,6 +968,18 @@ def process_new_event(event_data: dict[str, Any]) -> None:
 
     dispatched = 0
     for webhook in webhooks:
+        if webhook.filter_condition:
+            event_context = {
+                "contract_id": event_obj.contract.contract_id,
+                "event_type": event_obj.event_type,
+                "payload": event_obj.payload,
+                "decodedPayload": event_obj.decoded_payload or {},
+                "ledger": event_obj.ledger,
+                "event_index": event_obj.event_index,
+                "tx_hash": event_obj.tx_hash,
+            }
+            if not evaluate_condition(webhook.filter_condition, event_context):
+                continue
         dispatch_webhook.delay(webhook.id, event_obj.id)
         dispatched += 1
 
@@ -1162,6 +1228,19 @@ def ingest_latest_events() -> int:
                 continue
 
             payload = event.value
+
+            if not validate_contract_payload_schema(
+                contract,
+                payload,
+                event.type,
+                ledger=event.ledger,
+            ):
+                m.events_validation_failures_total.labels(
+                    contract_id=_short_contract_id(contract.contract_id),
+                    network=network,
+                ).inc()
+                continue
+
             passed, version_used = validate_event_payload(
                 contract, event.type, payload, ledger=event.ledger
             )
@@ -1482,7 +1561,7 @@ def evaluate_condition(condition: dict, event_data: dict) -> bool:
 
     Supported ops (case-insensitive):
       - Logical: and, or, not
-      - Comparison: eq, neq, gt, gte, lt, lte, contains, startswith, in
+            - Comparison: eq, neq, gt, gte, lt, lte, contains, startswith, in, regex
     """
     op = (condition.get("op") or "").lower()
 
@@ -1517,6 +1596,13 @@ def evaluate_condition(condition: dict, event_data: dict) -> bool:
         return str(current).startswith(str(value)) if current is not None else False
     if op == "in":
         return current in value if isinstance(value, list) else str(current) == str(value)
+    if op == "regex":
+        if current is None:
+            return False
+        try:
+            return re.search(str(value), str(current)) is not None
+        except re.error:
+            return False
 
     logger.warning("Unknown condition op '%s' — treating as False", op)
     return False

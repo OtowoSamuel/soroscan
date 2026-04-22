@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from datetime import timedelta
 
 from django.conf import settings
@@ -445,15 +446,22 @@ class WebhookSubscriptionViewSet(viewsets.ModelViewSet):
             "timestamp": timezone.now().isoformat(),
         }
         payload_bytes = json.dumps(test_payload, sort_keys=True).encode("utf-8")
+        algorithm = (webhook.signature_algorithm or WebhookSubscription.SIGNATURE_SHA256).lower()
+        if algorithm == WebhookSubscription.SIGNATURE_SHA1:
+            digestmod = hashlib.sha1
+            prefix = "sha1"
+        else:
+            digestmod = hashlib.sha256
+            prefix = "sha256"
         sig_hex = hmac.new(
             webhook.secret.encode("utf-8"),
             msg=payload_bytes,
-            digestmod=hashlib.sha256,
+            digestmod=digestmod,
         ).hexdigest()
 
         headers = {
             "Content-Type": "application/json",
-            "X-SoroScan-Signature": f"sha256={sig_hex}",
+            "X-SoroScan-Signature": f"{prefix}={sig_hex}",
             "X-SoroScan-Timestamp": timezone.now().isoformat(),
         }
 
@@ -473,6 +481,40 @@ class WebhookSubscriptionViewSet(viewsets.ModelViewSet):
             )
 
         return Response({"status": "test_webhook_queued"})
+
+    @extend_schema(
+        request=inline_serializer(
+            name="WebhookConditionDryRunRequest",
+            fields={
+                "sample_event": serializers.JSONField(),
+            },
+        ),
+        responses={
+            200: inline_serializer(
+                name="WebhookConditionDryRunResponse",
+                fields={
+                    "matched": serializers.BooleanField(),
+                },
+            )
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="dry-run")
+    def dry_run(self, request, pk=None):
+        webhook = self.get_object()
+        sample_event = request.data.get("sample_event")
+        if not isinstance(sample_event, dict):
+            return Response(
+                {"detail": "sample_event must be an object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not webhook.filter_condition:
+            return Response({"matched": True})
+
+        from .tasks import evaluate_condition
+
+        matched = evaluate_condition(webhook.filter_condition, sample_event)
+        return Response({"matched": bool(matched)})
 
 
 class TeamViewSet(viewsets.ModelViewSet):
@@ -952,3 +994,67 @@ def admin_ingest_errors_view(request):
     )
     
     return Response(list(errors))
+
+
+@extend_schema(
+    responses=inline_serializer(
+        name="RateLimitAnalyticsResponse",
+        fields={
+            "window_hours": serializers.IntegerField(),
+            "generated_at": serializers.DateTimeField(),
+            "api_keys": serializers.JSONField(),
+        },
+    )
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def rate_limit_analytics_view(request):
+    """Return 7-day API key usage analytics from Redis-backed counters."""
+    from django.core.cache import cache
+    from soroscan.throttles import _BUCKET_TTL
+
+    now_bucket = int(time.time()) // _BUCKET_TTL
+    window_hours = 24 * 7
+    keys = APIKey.objects.filter(user=request.user, is_active=True).order_by("name")
+    results = []
+
+    for key in keys:
+        hourly_hits = []
+        overages = 0
+        for offset in range(window_hours - 1, -1, -1):
+            bucket = now_bucket - offset
+            history_key = f"soroscan_api_key_quota_history:{key.id}:{bucket}"
+            hits = int(cache.get(history_key, 0) or 0)
+            if hits > key.quota_per_hour:
+                overages += 1
+            hourly_hits.append(hits)
+
+        total_hits = sum(hourly_hits)
+        avg_hits = (total_hits / window_hours) if window_hours else 0.0
+        quota = key.quota_per_hour
+        quota_used_percent = (avg_hits / quota * 100.0) if quota > 0 else 0.0
+        projected_next_24h_hits = int(round(avg_hits * 24))
+        projected_overage = projected_next_24h_hits > quota
+
+        results.append(
+            {
+                "api_key_id": key.id,
+                "name": key.name,
+                "tier": key.tier,
+                "quota_per_hour": quota,
+                "hourly_hits": hourly_hits,
+                "avg_hits_per_hour": round(avg_hits, 2),
+                "quota_used_percent": round(quota_used_percent, 2),
+                "overage_events": overages,
+                "projected_next_24h_hits": projected_next_24h_hits,
+                "projected_overage": projected_overage,
+            }
+        )
+
+    return Response(
+        {
+            "window_hours": window_hours,
+            "generated_at": timezone.now(),
+            "api_keys": results,
+        }
+    )
