@@ -106,7 +106,11 @@ async def test_async_get_events(
     response_data["results"] = [sample_event_data]
 
     httpx_mock.add_response(
-        url=f"{base_url}/api/events/",
+        url=(
+            f"{base_url}/api/events/?page=1&page_size=50&ordering=-timestamp"
+            "&contract__contract_id=CCAAA111222333444555666777888999AAABBBCCCDDDEEEFFF"
+            "&event_type=transfer"
+        ),
         json=response_data,
     )
 

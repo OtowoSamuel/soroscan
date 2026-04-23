@@ -167,7 +167,11 @@ def test_get_events(
     response_data["results"] = [sample_event_data]
 
     httpx_mock.add_response(
-        url=f"{base_url}/api/events/",
+        url=(
+            f"{base_url}/api/events/?page=1&page_size=50&ordering=-timestamp"
+            "&contract__contract_id=CCAAA111222333444555666777888999AAABBBCCCDDDEEEFFF"
+            "&event_type=transfer"
+        ),
         json=response_data,
     )
 
@@ -317,7 +321,7 @@ def test_error_handling_401(
 ) -> None:
     """Test 401 error handling."""
     httpx_mock.add_response(
-        url=f"{base_url}/api/contracts/",
+        url=f"{base_url}/api/contracts/?page=1&page_size=50",
         json={"detail": "Authentication required"},
         status_code=401,
     )
@@ -335,7 +339,7 @@ def test_error_handling_429(
 ) -> None:
     """Test 429 rate limit error handling."""
     httpx_mock.add_response(
-        url=f"{base_url}/api/events/",
+        url=f"{base_url}/api/events/?page=1&page_size=50&ordering=-timestamp",
         json={"detail": "Rate limit exceeded"},
         status_code=429,
     )

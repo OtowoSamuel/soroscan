@@ -21,8 +21,8 @@ def test_single_leaf_node():
     """
     Assert the ingest migration graph has exactly one leaf node.
 
-    The current leaf is '0030_webhook_backoff_strategy' which depends on
-    '0029_contractmetadata'.
+    The current leaf is '0031_trackedcontract_json_schema_and_webhook_filters'
+    which depends on '0030_webhook_backoff_strategy'.
     """
     loader = MigrationLoader(None, ignore_no_migrations=True)
 
@@ -32,8 +32,9 @@ def test_single_leaf_node():
     assert len(leaf_nodes) == 1, (
         f"Expected 1 leaf node for 'ingest', found {len(leaf_nodes)}: {leaf_nodes}"
     )
-    assert leaf_nodes[0][1] == "0030_webhook_backoff_strategy", (
-        f"Expected leaf node '0030_webhook_backoff_strategy', got '{leaf_nodes[0][1]}'"
+    assert leaf_nodes[0][1] == "0031_trackedcontract_json_schema_and_webhook_filters", (
+        "Expected leaf node '0031_trackedcontract_json_schema_and_webhook_filters', "
+        f"got '{leaf_nodes[0][1]}'"
     )
 
 

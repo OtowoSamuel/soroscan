@@ -31,7 +31,11 @@ def test_complete_workflow(
     events_response = sample_paginated_response.copy()
     events_response["results"] = [sample_event_data]
     httpx_mock.add_response(
-        url=f"{base_url}/api/events/",
+        url=(
+            f"{base_url}/api/events/?page=1&page_size=50&ordering=-timestamp"
+            "&contract__contract_id=CCAAA111222333444555666777888999AAABBBCCCDDDEEEFFF"
+            "&event_type=transfer"
+        ),
         json=events_response,
     )
 
@@ -102,7 +106,7 @@ def test_pagination_workflow(
         "results": [sample_event_data] * 50,
     }
     httpx_mock.add_response(
-        url=f"{base_url}/api/events/",
+        url=f"{base_url}/api/events/?page=1&page_size=50&ordering=-timestamp",
         json=page1_response,
     )
 
@@ -114,7 +118,7 @@ def test_pagination_workflow(
         "results": [sample_event_data] * 50,
     }
     httpx_mock.add_response(
-        url=f"{base_url}/api/events/",
+        url=f"{base_url}/api/events/?page=2&page_size=50&ordering=-timestamp",
         json=page2_response,
     )
 
@@ -126,7 +130,7 @@ def test_pagination_workflow(
         "results": [sample_event_data] * 50,
     }
     httpx_mock.add_response(
-        url=f"{base_url}/api/events/",
+        url=f"{base_url}/api/events/?page=3&page_size=50&ordering=-timestamp",
         json=page3_response,
     )
 
@@ -158,7 +162,12 @@ def test_event_filtering_workflow(
     filtered_response["results"] = [sample_event_data] * 10
 
     httpx_mock.add_response(
-        url=f"{base_url}/api/events/",
+        url=(
+            f"{base_url}/api/events/?page=1&page_size=50&ordering=-ledger"
+            "&contract__contract_id=CCAAA111222333444555666777888999AAABBBCCCDDDEEEFFF"
+            "&event_type=transfer&ledger__gte=100000&ledger__lte=200000"
+            "&validation_status=passed"
+        ),
         json=filtered_response,
     )
 
@@ -259,4 +268,4 @@ async def test_async_concurrent_workflow(
 
         assert len(contracts) == 5
         assert all(isinstance(c, TrackedContract) for c in contracts)
-        assert [c.name for c in contracts] == [f"Contract {i}" for i in range(1, 5)]
+        assert [c.name for c in contracts] == [f"Contract {i}" for i in range(1, 6)]
