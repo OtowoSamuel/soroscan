@@ -1,0 +1,16 @@
+{% extends "admin/change_form.html" %}
+{% load i18n %}
+
+{% block object-tools-items %}
+  {% if original %}
+  <li>
+    <form method="post" action="{% url 'admin:webhooksubscription_ping' original.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="button">
+        🔔 Send Test Ping
+      </button>
+    </form>
+  </li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

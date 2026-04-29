@@ -6,11 +6,12 @@ from django.contrib import admin, messages
 from django.contrib.admin.helpers import ActionForm, ACTION_CHECKBOX_NAME
 from django.db.models import Count
 from django.http import HttpResponse, StreamingHttpResponse
-from django.urls import path
+from django.urls import path, reverse
 from django.utils.html import format_html
-import json
 import csv
+import json
 from datetime import datetime
+import requests as http_requests
 
 from .models import (
     AlertExecution,
@@ -548,6 +549,7 @@ class ContractEventAdmin(AdminAuditMixin, admin.ModelAdmin):
 @admin.register(WebhookSubscription)
 class WebhookSubscriptionAdmin(AdminAuditMixin, admin.ModelAdmin):
     """Admin interface for webhook subscriptions with delivery status display."""
+    change_form_template = "admin/ingest/webhooksubscription/change_form.html"
     list_display = [
         "target_url",
         "contract_name",
@@ -596,7 +598,6 @@ class WebhookSubscriptionAdmin(AdminAuditMixin, admin.ModelAdmin):
         js = ("ingest/admin_event_type_autocomplete.js",)
 
     def get_urls(self):
-        from django.urls import path
         urls = super().get_urls()
         custom_urls = [
             path(
@@ -604,8 +605,63 @@ class WebhookSubscriptionAdmin(AdminAuditMixin, admin.ModelAdmin):
                 self.admin_site.admin_view(self.event_types_api),
                 name="webhooksubscription_event_types",
             ),
+            path(
+                "<int:pk>/ping/",
+                self.admin_site.admin_view(self.ping_webhook),
+                name="webhooksubscription_ping",
+            ),
         ]
         return custom_urls + urls
+
+    def ping_webhook(self, request, pk):
+        import hashlib
+        import hmac
+        from django.shortcuts import redirect
+        from django.utils import timezone
+
+        webhook = WebhookSubscription.objects.get(pk=pk)
+        test_payload = {
+            "event_type": "ping",
+            "payload": {"message": "This is a test ping from SoroScan admin"},
+            "contract_id": webhook.contract.contract_id,
+            "timestamp": timezone.now().isoformat(),
+        }
+        payload_bytes = json.dumps(test_payload, sort_keys=True).encode("utf-8")
+        algorithm = (webhook.signature_algorithm or WebhookSubscription.SIGNATURE_SHA256).lower()
+        digestmod = hashlib.sha1 if algorithm == WebhookSubscription.SIGNATURE_SHA1 else hashlib.sha256
+        prefix = "sha1" if algorithm == WebhookSubscription.SIGNATURE_SHA1 else "sha256"
+        sig_hex = hmac.new(
+            webhook.secret.encode("utf-8"),
+            msg=payload_bytes,
+            digestmod=digestmod,
+        ).hexdigest()
+        headers = {
+            "Content-Type": "application/json",
+            "X-SoroScan-Signature": f"{prefix}={sig_hex}",
+            "X-SoroScan-Timestamp": timezone.now().isoformat(),
+        }
+        try:
+            response = http_requests.post(
+                webhook.target_url,
+                data=payload_bytes,
+                headers=headers,
+                timeout=10,
+            )
+            response.raise_for_status()
+            self.message_user(
+                request,
+                f"Test ping sent successfully to {webhook.target_url} (HTTP {response.status_code}).",
+                messages.SUCCESS,
+            )
+        except http_requests.RequestException as exc:
+            self.message_user(
+                request,
+                f"Test ping to {webhook.target_url} failed: {exc}",
+                messages.ERROR,
+            )
+        return redirect(
+            reverse("admin:ingest_webhooksubscription_change", args=[pk])
+        )
 
     def event_types_api(self, request):
         from django.http import JsonResponse
