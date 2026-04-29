@@ -2248,6 +2248,45 @@ def aggregate_event_statistics() -> dict[str, Any]:
     }
 
 
+@shared_task(name="ingest.tasks.log_daily_platform_stats")
+def log_daily_platform_stats() -> dict[str, Any]:
+    """
+    Log platform usage stats for the last 24 hours.
+    """
+    window_end = timezone.now()
+    window_start = window_end - timedelta(hours=24)
+
+    total_events = ContractEvent.objects.filter(
+        timestamp__gte=window_start,
+        timestamp__lt=window_end,
+    ).count()
+    new_contracts = TrackedContract.objects.filter(
+        created_at__gte=window_start,
+        created_at__lt=window_end,
+    ).count()
+
+    logger.info(
+        "Daily platform stats for %s to %s: %d events ingested, %d contracts registered",
+        window_start.isoformat(),
+        window_end.isoformat(),
+        total_events,
+        new_contracts,
+        extra={
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+            "total_events_ingested": total_events,
+            "new_contracts_registered": new_contracts,
+        },
+    )
+
+    return {
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+        "total_events_ingested": total_events,
+        "new_contracts_registered": new_contracts,
+    }
+
+
 @shared_task(name="ingest.tasks.reconcile_event_completeness")
 def reconcile_event_completeness() -> dict[str, Any]:
     """

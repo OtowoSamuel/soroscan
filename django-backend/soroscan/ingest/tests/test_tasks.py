@@ -3,7 +3,7 @@ Tests for Celery tasks — webhook dispatch, retry logic, HMAC signing, suspensi
 """
 import hashlib
 import hmac
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from unittest.mock import Mock, patch
 
 import pytest
@@ -28,6 +28,7 @@ from soroscan.ingest.tasks import (
     cleanup_webhook_delivery_logs,
     dispatch_webhook,
     evaluate_remediation_rules,
+    log_daily_platform_stats,
     process_new_event,
     send_alert,
     validate_contract_payload_schema,
@@ -39,6 +40,7 @@ from .factories import (
     EventSchemaFactory,
     WebhookDeliveryLogFactory,
     WebhookSubscriptionFactory,
+    TrackedContractFactory,
 )
 
 
@@ -128,6 +130,64 @@ class TestValidateContractPayloadSchema:
         contract.save(update_fields=["json_schema"])
 
         assert validate_contract_payload_schema(contract, {"bad": 1}, "transfer") is False
+
+
+# ---------------------------------------------------------------------------
+# log_daily_platform_stats
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestLogDailyPlatformStats:
+    def test_counts_only_rows_inside_last_24_hours(self, user):
+        fixed_now = datetime(2026, 4, 28, 12, 0, 0, tzinfo=dt_timezone.utc)
+        window_start = fixed_now - timedelta(hours=24)
+
+        contract_inside_a = TrackedContractFactory(owner=user)
+        contract_inside_b = TrackedContractFactory(owner=user)
+        contract_outside = TrackedContractFactory(owner=user)
+
+        contract_inside_a.__class__.objects.filter(pk=contract_inside_a.pk).update(
+            created_at=window_start + timedelta(hours=1)
+        )
+        contract_inside_b.__class__.objects.filter(pk=contract_inside_b.pk).update(
+            created_at=window_start + timedelta(hours=12)
+        )
+        contract_outside.__class__.objects.filter(pk=contract_outside.pk).update(
+            created_at=window_start - timedelta(hours=1)
+        )
+
+        ContractEventFactory(
+            contract=contract_inside_a,
+            timestamp=window_start + timedelta(hours=2),
+            ledger=4100,
+            event_index=0,
+            tx_hash="a" * 64,
+        )
+        ContractEventFactory(
+            contract=contract_inside_b,
+            timestamp=window_start + timedelta(hours=23, minutes=59),
+            ledger=4101,
+            event_index=0,
+            tx_hash="b" * 64,
+        )
+        ContractEventFactory(
+            contract=contract_outside,
+            timestamp=window_start - timedelta(minutes=1),
+            ledger=4102,
+            event_index=0,
+            tx_hash="c" * 64,
+        )
+
+        with patch("soroscan.ingest.tasks.timezone.now", return_value=fixed_now):
+            result = log_daily_platform_stats()
+
+        assert result == {
+            "window_start": window_start.isoformat(),
+            "window_end": fixed_now.isoformat(),
+            "total_events_ingested": 2,
+            "new_contracts_registered": 2,
+        }
 
 
 # ---------------------------------------------------------------------------
