@@ -149,6 +149,21 @@ class RequestBodySizeMiddleware:
         
         return self.get_response(request)
         
+class MaintenanceModeMiddleware:
+    """Return 503 for all non-admin routes when MAINTENANCE_MODE=True."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if getattr(settings, "MAINTENANCE_MODE", False) and not request.path.startswith("/admin"):
+            return JsonResponse(
+                {"error": "Service temporarily unavailable. Please try again later."},
+                status=503,
+            )
+        return self.get_response(request)
+
+
 class ApiDeprecationMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response

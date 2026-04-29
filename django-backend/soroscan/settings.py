@@ -105,6 +105,7 @@ MIDDLEWARE = [
     # PrometheusBeforeMiddleware must be first to capture all requests.
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "soroscan.middleware.RequestBodySizeMiddleware",
+    "soroscan.middleware.MaintenanceModeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "soroscan.middleware.ReverseProxyFixedIPMiddleware",
