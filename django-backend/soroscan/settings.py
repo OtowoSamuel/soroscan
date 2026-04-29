@@ -56,6 +56,20 @@ if not _running_tests:
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-change-this-in-production")
 
+# Warn on startup if SECRET_KEY is weak or a known default
+_KNOWN_WEAK_KEYS = {
+    "django-insecure-change-this-in-production",
+    "secret",
+    "changeme",
+    "insecure",
+}
+if len(SECRET_KEY) < 50 or SECRET_KEY in _KNOWN_WEAK_KEYS:
+    import logging as _logging
+    _logging.getLogger("soroscan.security").warning(
+        "SECRET_KEY is too short or matches a known default. "
+        "Set a strong, unique SECRET_KEY before deploying to production."
+    )
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env("DEBUG")
 
