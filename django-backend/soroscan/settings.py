@@ -313,6 +313,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "ingest.tasks.recompute_call_graph",
         "schedule": 3600,  # hourly
     },
+    "warm-event-count-cache": {
+        "task": "ingest.tasks.warm_event_count_cache",
+        "schedule": 300,  # every 5 minutes
+    },
 }
 
 # Data Retention Configuration

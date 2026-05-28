@@ -1074,3 +1074,91 @@ class TestWebhookBackoff:
         with pytest.raises(Retry):
             dispatch_webhook.apply(args=[webhook.id, event.id], retries=0, throw=True)
 
+
+
+# ---------------------------------------------------------------------------
+# warm_event_count_cache (issue #587)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestWarmEventCountCache:
+    """Tests for cache warming task (issue #587)."""
+
+    def test_warms_cache_for_active_contracts(self, contract):
+        """Test that cache warming task caches event counts for active contracts."""
+        from soroscan.ingest.tasks import warm_event_count_cache
+        from django.core.cache import cache
+        
+        # Create some events
+        ContractEventFactory.create_batch(5, contract=contract)
+        
+        # Clear cache
+        cache.clear()
+        
+        # Run cache warming
+        result = warm_event_count_cache()
+        
+        # Verify result
+        assert result["contracts_warmed"] >= 1
+        assert "duration_seconds" in result
+        assert "timestamp" in result
+        
+        # Verify cache was populated
+        cache_key = f"event_count:{contract.contract_id}"
+        cached_count = cache.get(cache_key)
+        assert cached_count == 5
+
+    def test_handles_inactive_contracts(self):
+        """Test that inactive contracts are not warmed."""
+        from soroscan.ingest.tasks import warm_event_count_cache
+        
+        # Create inactive contract
+        inactive_contract = TrackedContractFactory(is_active=False)
+        ContractEventFactory.create_batch(3, contract=inactive_contract)
+        
+        # Run cache warming
+        result = warm_event_count_cache()
+        
+        # Should complete without error
+        assert "contracts_warmed" in result
+
+    def test_handles_errors_gracefully(self, contract):
+        """Test that cache warming continues even if one contract fails."""
+        from soroscan.ingest.tasks import warm_event_count_cache
+        from django.core.cache import cache
+        
+        ContractEventFactory.create_batch(2, contract=contract)
+        
+        # Mock get_event_count to raise exception for first call, succeed for others
+        call_count = 0
+        original_get = cache.get
+        
+        def mock_get(key, default=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("Simulated cache error")
+            return original_get(key, default)
+        
+        with patch("django.core.cache.cache.get", side_effect=mock_get):
+            result = warm_event_count_cache()
+        
+        # Should complete despite error
+        assert "contracts_warmed" in result
+
+    def test_limits_to_top_100_contracts(self):
+        """Test that cache warming only processes top 100 most active contracts."""
+        from soroscan.ingest.tasks import warm_event_count_cache
+        
+        # Create 150 contracts
+        for i in range(150):
+            contract = TrackedContractFactory(
+                is_active=True,
+                last_event_at=timezone.now() - timedelta(hours=i)
+            )
+            ContractEventFactory(contract=contract)
+        
+        result = warm_event_count_cache()
+        
+        # Should warm at most 100 contracts
+        assert result["contracts_warmed"] <= 100

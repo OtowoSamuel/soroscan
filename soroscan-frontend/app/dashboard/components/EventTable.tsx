@@ -38,7 +38,42 @@ export function EventTable({ events, loading, onEventClick }: EventTableProps) {
   if (loading) {
     return (
       <div className={styles.tableWrap}>
-        <div className={styles.status}>Loading events...</div>
+        <table className={styles.eventTable}>
+          <thead>
+            <tr>
+              <th>Contract</th>
+              <th>Type</th>
+              <th>Ledger</th>
+              <th>Time</th>
+              <th>Transaction</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...Array(5)].map((_, index) => (
+              <tr key={`skeleton-${index}`}>
+                <td data-label="Contract">
+                  <div className={styles.skeleton} style={{ width: "120px", height: "20px" }} />
+                </td>
+                <td data-label="Type">
+                  <div className={styles.skeleton} style={{ width: "80px", height: "24px", borderRadius: "12px" }} />
+                </td>
+                <td data-label="Ledger">
+                  <div className={styles.skeleton} style={{ width: "60px", height: "24px" }} />
+                </td>
+                <td data-label="Time">
+                  <div className={styles.skeleton} style={{ width: "140px", height: "20px" }} />
+                </td>
+                <td data-label="Tx">
+                  <div className={styles.skeleton} style={{ width: "100px", height: "20px" }} />
+                </td>
+                <td data-label="Actions">
+                  <div className={styles.skeleton} style={{ width: "50px", height: "28px" }} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     );
   }

@@ -2248,6 +2248,60 @@ def aggregate_event_statistics() -> dict[str, Any]:
     }
 
 
+@shared_task(name="ingest.tasks.warm_event_count_cache")
+def warm_event_count_cache() -> dict[str, Any]:
+    """
+    Periodically warm cache with frequently accessed contract event counts (issue #587).
+    
+    This task proactively caches event counts for active contracts to improve
+    cache hit rates and reduce database load for frequently accessed data.
+    """
+    _start = time.monotonic()
+    from .cache_utils import get_event_count
+    
+    # Get all active contracts ordered by last activity (most recent first)
+    active_contracts = TrackedContract.objects.filter(
+        is_active=True
+    ).order_by('-last_event_at')[:100]  # Warm top 100 most active contracts
+    
+    warmed_count = 0
+    for contract in active_contracts:
+        try:
+            # Call get_event_count which will cache the result
+            count = get_event_count(contract.contract_id)
+            warmed_count += 1
+            logger.debug(
+                "Warmed cache for contract %s: %d events",
+                contract.contract_id,
+                count,
+                extra={"contract_id": contract.contract_id, "event_count": count},
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to warm cache for contract %s: %s",
+                contract.contract_id,
+                exc,
+                extra={"contract_id": contract.contract_id},
+            )
+    
+    elapsed = time.monotonic() - _start
+    logger.info(
+        "Cache warming completed: %d contracts processed in %.2fs",
+        warmed_count,
+        elapsed,
+        extra={"contracts_warmed": warmed_count, "duration_seconds": round(elapsed, 3)},
+    )
+    
+    m = _get_metrics()
+    m.task_duration_seconds.labels(task_name="warm_event_count_cache").observe(elapsed)
+    
+    return {
+        "contracts_warmed": warmed_count,
+        "duration_seconds": round(elapsed, 3),
+        "timestamp": timezone.now().isoformat(),
+    }
+
+
 @shared_task(name="ingest.tasks.log_daily_platform_stats")
 def log_daily_platform_stats() -> dict[str, Any]:
     """

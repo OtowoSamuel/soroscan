@@ -4,6 +4,7 @@ import { useState } from "react";
 import { formatDateTime } from "@/components/ingest/formatters";
 import type { EventRecord } from "@/components/ingest/types";
 import styles from "@/components/ingest/ingest-terminal.module.css";
+import { JsonHighlight } from "./JsonHighlight";
 
 interface EventDetailModalProps {
   event: EventRecord;
@@ -82,38 +83,12 @@ export function EventDetailModal({ event, onClose }: EventDetailModalProps) {
             <div>
               <div
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
                   marginBottom: "0.5rem",
                 }}
               >
                 <label className={styles.fieldLabel}>Payload</label>
-                <button
-                  type="button"
-                  className={styles.btn}
-                  style={{ padding: "0.3rem 0.6rem", fontSize: "0.75rem" }}
-                  onClick={() =>
-                    copyToClipboard(JSON.stringify(event.payload, null, 2), "payload")
-                  }
-                >
-                  {copied === "payload" ? "Copied!" : "Copy"}
-                </button>
               </div>
-              <pre
-                style={{
-                  background: "rgba(0, 0, 0, 0.3)",
-                  border: "1px solid rgba(0, 212, 255, 0.3)",
-                  padding: "0.75rem",
-                  borderRadius: "4px",
-                  overflow: "auto",
-                  maxHeight: "300px",
-                  fontSize: "0.8rem",
-                  color: "#00d4ff",
-                }}
-              >
-                {JSON.stringify(event.payload, null, 2)}
-              </pre>
+              <JsonHighlight data={event.payload} theme="dark" maxHeight="300px" />
             </div>
 
             {event.payloadHash && (

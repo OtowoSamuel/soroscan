@@ -1,6 +1,6 @@
 """SoroScan API client implementations."""
 
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING
 from urllib.parse import urljoin
 
 import httpx
@@ -22,6 +22,9 @@ from soroscan.models import (
     TrackedContract,
     WebhookSubscription,
 )
+
+if TYPE_CHECKING:
+    from soroscan.builder import EventQueryBuilder, ContractQueryBuilder, AsyncEventQueryBuilder, AsyncContractQueryBuilder
 
 
 class SoroScanClient:
@@ -61,6 +64,39 @@ class SoroScanClient:
     def close(self) -> None:
         """Close the HTTP client."""
         self._client.close()
+
+    def events(self) -> "EventQueryBuilder":
+        """
+        Create a fluent event query builder (issue #481).
+        
+        Example:
+            >>> events = (client.events()
+            ...     .filter_by_contract("CCAAA...")
+            ...     .filter_by_event_type("transfer")
+            ...     .paginate(limit=50, offset=0)
+            ...     .execute())
+        
+        Returns:
+            EventQueryBuilder instance for method chaining
+        """
+        from soroscan.builder import EventQueryBuilder
+        return EventQueryBuilder(self)
+    
+    def contracts(self) -> "ContractQueryBuilder":
+        """
+        Create a fluent contract query builder (issue #481).
+        
+        Example:
+            >>> contracts = (client.contracts()
+            ...     .filter_by_active(True)
+            ...     .search("token")
+            ...     .execute())
+        
+        Returns:
+            ContractQueryBuilder instance for method chaining
+        """
+        from soroscan.builder import ContractQueryBuilder
+        return ContractQueryBuilder(self)
 
     def _get_headers(self) -> dict[str, str]:
         """Build request headers."""
@@ -490,6 +526,37 @@ class AsyncSoroScanClient:
     async def close(self) -> None:
         """Close the HTTP client."""
         await self._client.aclose()
+
+    def events(self) -> "AsyncEventQueryBuilder":
+        """
+        Create a fluent async event query builder (issue #481).
+        
+        Example:
+            >>> events = await (client.events()
+            ...     .filter_by_contract("CCAAA...")
+            ...     .filter_by_event_type("transfer")
+            ...     .execute())
+        
+        Returns:
+            AsyncEventQueryBuilder instance for method chaining
+        """
+        from soroscan.builder import AsyncEventQueryBuilder
+        return AsyncEventQueryBuilder(self)
+    
+    def contracts(self) -> "AsyncContractQueryBuilder":
+        """
+        Create a fluent async contract query builder (issue #481).
+        
+        Example:
+            >>> contracts = await (client.contracts()
+            ...     .filter_by_active(True)
+            ...     .execute())
+        
+        Returns:
+            AsyncContractQueryBuilder instance for method chaining
+        """
+        from soroscan.builder import AsyncContractQueryBuilder
+        return AsyncContractQueryBuilder(self)
 
     def _get_headers(self) -> dict[str, str]:
         """Build request headers."""
