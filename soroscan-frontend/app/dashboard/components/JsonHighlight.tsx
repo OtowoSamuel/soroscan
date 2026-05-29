@@ -30,7 +30,27 @@ export function JsonHighlight({
     }
   };
 
+  const getColorStyles = () => {
+    if (theme === "dark") {
+      return {
+        key: "#00ff9c",
+        string: "#00d4ff",
+        number: "#ffaa00",
+        boolean: "#ff66ff",
+        null: "#888",
+      };
+    }
+    return {
+      key: "#0066cc",
+      string: "#cc0000",
+      number: "#ff6600",
+      boolean: "#9900cc",
+      null: "#666",
+    };
+  };
+
   const highlightJson = (json: string): string => {
+    const colors = getColorStyles();
     // Simple regex-based syntax highlighting
     return json
       .replace(/&/g, "&amp;")
@@ -39,19 +59,25 @@ export function JsonHighlight({
       .replace(
         /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
         (match) => {
-          let cls = "json-number";
+          let color = colors.number;
+          let fontWeight = "normal";
+          let fontStyle = "normal";
+          
           if (/^"/.test(match)) {
             if (/:$/.test(match)) {
-              cls = "json-key";
+              color = colors.key;
+              fontWeight = "500";
             } else {
-              cls = "json-string";
+              color = colors.string;
             }
           } else if (/true|false/.test(match)) {
-            cls = "json-boolean";
+            color = colors.boolean;
+            fontWeight = "600";
           } else if (/null/.test(match)) {
-            cls = "json-null";
+            color = colors.null;
+            fontStyle = "italic";
           }
-          return `<span class="${cls}">${match}</span>`;
+          return `<span style="color: ${color}; font-weight: ${fontWeight}; font-style: ${fontStyle};">${match}</span>`;
         }
       );
   };
@@ -109,27 +135,6 @@ export function JsonHighlight({
         }}
         dangerouslySetInnerHTML={{ __html: highlightJson(jsonString) }}
       />
-      
-      <style jsx>{`
-        .json-key {
-          color: ${theme === "dark" ? "#00ff9c" : "#0066cc"};
-          font-weight: 500;
-        }
-        .json-string {
-          color: ${theme === "dark" ? "#00d4ff" : "#cc0000"};
-        }
-        .json-number {
-          color: ${theme === "dark" ? "#ffaa00" : "#ff6600"};
-        }
-        .json-boolean {
-          color: ${theme === "dark" ? "#ff66ff" : "#9900cc"};
-          font-weight: 600;
-        }
-        .json-null {
-          color: ${theme === "dark" ? "#888" : "#666"};
-          font-style: italic;
-        }
-      `}</style>
     </div>
   );
 }
