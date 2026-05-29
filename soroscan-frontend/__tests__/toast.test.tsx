@@ -36,18 +36,21 @@ describe("Toast System", () => {
     expect(screen.getByRole("status")).toBeInTheDocument();
   });
 
-  it("auto-dismisses after 4 seconds", () => {
+  it("auto-dismisses after 4 seconds", async () => {
     render(
       <ToastProvider duration={4000}>
         <ToastTrigger />
       </ToastProvider>
     );
 
-    fireEvent.click(screen.getByText("Show Toast"));
+    act(() => {
+      fireEvent.click(screen.getByText("Show Toast"));
+    });
+    
     expect(screen.getByText("Test Title")).toBeInTheDocument();
 
     // Fast-forward 4 seconds
-    act(() => {
+    await act(async () => {
       jest.advanceTimersByTime(4000);
     });
 
@@ -98,14 +101,14 @@ describe("Toast System", () => {
     expect(toasts.length).toBe(2);
   });
 
-  it("works with global showToast helper", () => {
+  it("works with global showToast helper", async () => {
     render(
       <ToastProvider>
         <div>Content</div>
       </ToastProvider>
     );
 
-    act(() => {
+    await act(async () => {
       showToast("Global message", "warning", "Global Title");
     });
 
