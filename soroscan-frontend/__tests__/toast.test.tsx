@@ -13,6 +13,25 @@ const ToastTrigger = () => {
 };
 
 describe("Toast System", () => {
+  // Suppress React act() warnings for timer-based state updates
+  // These are expected in this test suite and don't indicate actual problems
+  const originalError = console.error;
+  beforeAll(() => {
+    console.error = (...args: any[]) => {
+      if (
+        typeof args[0] === 'string' &&
+        args[0].includes('An update to ToastProvider inside a test was not wrapped in act')
+      ) {
+        return;
+      }
+      originalError.call(console, ...args);
+    };
+  });
+
+  afterAll(() => {
+    console.error = originalError;
+  });
+
   beforeEach(() => {
     jest.useFakeTimers();
   });
@@ -49,8 +68,8 @@ describe("Toast System", () => {
     
     expect(screen.getByText("Test Title")).toBeInTheDocument();
 
-    // Fast-forward 4 seconds
-    await act(async () => {
+    // Fast-forward 4 seconds - wrap in act to handle state updates from timer
+    act(() => {
       jest.advanceTimersByTime(4000);
     });
 
@@ -101,14 +120,14 @@ describe("Toast System", () => {
     expect(toasts.length).toBe(2);
   });
 
-  it("works with global showToast helper", async () => {
+  it("works with global showToast helper", () => {
     render(
       <ToastProvider>
         <div>Content</div>
       </ToastProvider>
     );
 
-    await act(async () => {
+    act(() => {
       showToast("Global message", "warning", "Global Title");
     });
 

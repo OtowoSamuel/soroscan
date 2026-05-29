@@ -53,14 +53,17 @@ describe("JsonHighlight", () => {
     const copyButton = screen.getByRole("button", { name: /copy/i });
     fireEvent.click(copyButton);
     
+    // Wait for clipboard write
     await waitFor(() => {
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
         JSON.stringify(sampleData, null, 2)
       );
     });
     
-    // Check that button text changes to "Copied!"
-    expect(screen.getByText(/✓ Copied!/)).toBeInTheDocument();
+    // Wait for button text to change
+    await waitFor(() => {
+      expect(screen.getByText(/✓ Copied!/)).toBeInTheDocument();
+    });
   });
 
   it("resets copy button text after 2 seconds", async () => {
