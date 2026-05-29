@@ -71,11 +71,15 @@ export function ToastProvider({
         ...current,
       ]);
 
-      window.setTimeout(() => {
-        dismissToast(id);
+      // Schedule auto-dismiss
+      const timer = window.setTimeout(() => {
+        setToasts((current) => current.filter((toast) => toast.id !== id));
       }, duration);
+
+      // Return cleanup function (though we can't easily use it here)
+      return () => window.clearTimeout(timer);
     },
-    [dismissToast, duration],
+    [duration],
   );
 
    useEffect(() => {
