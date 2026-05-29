@@ -12,13 +12,15 @@ import {
 } from "@/components/terminal/Table";
 import { Button } from "@/components/terminal/Button";
 import type { Contract } from "@/components/ingest/contract-types";
+import { ContractEmptyState } from "./ContractEmptyState";
 
 interface ContractTableProps {
   contracts: Contract[];
   onDelete: (id: string) => void;
+  onRegister: () => void;
 }
 
-export function ContractTable({ contracts, onDelete }: ContractTableProps) {
+export function ContractTable({ contracts, onDelete, onRegister }: ContractTableProps) {
   const router = useRouter();
 
   const handleRowClick = (id: string) => {
@@ -26,11 +28,7 @@ export function ContractTable({ contracts, onDelete }: ContractTableProps) {
   };
 
   if (contracts.length === 0) {
-    return (
-      <div className="text-center text-terminal-gray py-8 font-terminal-mono">
-        No contracts registered. Click &quot;Register Contract&quot; to add one.
-      </div>
-    );
+    return <ContractEmptyState onRegister={onRegister} />;
   }
 
   return (

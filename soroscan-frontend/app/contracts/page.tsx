@@ -96,7 +96,11 @@ export default function ContractsPage() {
               LOADING...
             </div>
           ) : (
-            <ContractTable contracts={contracts} onDelete={handleDeleteClick} />
+            <ContractTable
+                contracts={contracts}
+                onDelete={handleDeleteClick}
+                onRegister={() => setIsRegisterModalOpen(true)}
+              />
           )}
         </Card>
 
