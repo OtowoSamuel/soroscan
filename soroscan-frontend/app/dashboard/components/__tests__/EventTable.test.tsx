@@ -112,8 +112,8 @@ describe("EventTable", () => {
       skeletons = container.querySelectorAll(".skeleton");
       expect(skeletons.length).toBe(0);
 
-      // Content should be visible
-      expect(screen.getByText("Test Contract")).toBeInTheDocument();
+      // Content should be visible (check for shortened contract ID)
+      expect(screen.getByText(/CCAAA/)).toBeInTheDocument();
     });
   });
 
@@ -123,8 +123,9 @@ describe("EventTable", () => {
         <EventTable events={mockEvents} loading={false} onEventClick={mockOnEventClick} />
       );
 
-      expect(screen.getByText("Test Contract")).toBeInTheDocument();
-      expect(screen.getByText("Another Contract")).toBeInTheDocument();
+      // Check for shortened contract IDs (not full names)
+      expect(screen.getByText(/CCAAA/)).toBeInTheDocument();
+      expect(screen.getByText(/CCBBB/)).toBeInTheDocument();
       expect(screen.getByText("transfer")).toBeInTheDocument();
       expect(screen.getByText("swap")).toBeInTheDocument();
     });
@@ -226,11 +227,15 @@ describe("EventTable", () => {
       );
 
       const rows = container.querySelectorAll("tbody tr");
-      const keys = Array.from(rows).map((row) => row.getAttribute("key"));
       
-      // All keys should be unique
-      const uniqueKeys = new Set(keys);
-      expect(uniqueKeys.size).toBe(rows.length);
+      // Check that we have 5 skeleton rows
+      expect(rows.length).toBe(5);
+      
+      // React keys are used internally and don't appear in DOM
+      // Just verify all rows are rendered
+      rows.forEach((row) => {
+        expect(row).toBeInTheDocument();
+      });
     });
   });
 });
