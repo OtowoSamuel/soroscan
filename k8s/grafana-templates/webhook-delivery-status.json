@@ -1,0 +1,110 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus datasource",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "name": "Retry spikes",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "enable": true,
+        "expr": "sum(rate(celery_tasks_total{name=~\".*webhook.*retry.*\",state=\"STARTED\"}[5m])) > 0",
+        "iconColor": "rgba(255, 106, 106, 1)",
+        "titleFormat": "Retry burst",
+        "textFormat": "Webhook retries are increasing"
+      }
+    ]
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "id": 21,
+      "title": "Webhook Success Rate",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(celery_tasks_total{name=~\".*webhook.*\",state=\"SUCCESS\",job=~\"$job\"}[5m])) / clamp_min(sum(rate(celery_tasks_total{name=~\".*webhook.*\",job=~\"$job\"}[5m])), 1)",
+          "legendFormat": "success %"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "Webhook Retry Throughput",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(celery_tasks_total{name=~\".*webhook.*retry.*\",job=~\"$job\"}[5m]))",
+          "legendFormat": "retry/s"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "Webhook Delivery Runtime p95",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(celery_task_runtime_seconds_bucket{name=~\".*webhook.*\",instance=~\"$instance\"}[5m])) by (le, name))",
+          "legendFormat": "{{name}}"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "title": "Failure Breakdown",
+      "type": "table",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(celery_tasks_total{name=~\".*webhook.*\",state=\"FAILURE\",job=~\"$job\"}[5m])) by (name)",
+          "legendFormat": "{{name}}",
+          "format": "table"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["soroscan", "webhook", "delivery"],
+  "templating": {
+    "list": [
+      {
+        "name": "job",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(celery_tasks_total{name=~\".*webhook.*\"}, job)",
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(celery_tasks_total{job=~\"$job\"}, instance)",
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "title": "SoroScan - Webhook Delivery Status",
+  "uid": "soroscan-webhook-template",
+  "version": 1
+}

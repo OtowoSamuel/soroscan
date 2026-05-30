@@ -1,0 +1,118 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus datasource",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "name": "Performance regressions",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "enable": true,
+        "expr": "histogram_quantile(0.99, sum(rate(django_http_requests_latency_seconds_bucket[5m])) by (le)) > 2",
+        "iconColor": "rgba(255, 170, 0, 1)",
+        "titleFormat": "p99 > 2s",
+        "textFormat": "API latency regression detected"
+      }
+    ]
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "id": 31,
+      "title": "API Latency Percentiles",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(django_http_requests_latency_seconds_bucket{job=~\"$job\",instance=~\"$instance\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(django_http_requests_latency_seconds_bucket{job=~\"$job\",instance=~\"$instance\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(django_http_requests_latency_seconds_bucket{job=~\"$job\",instance=~\"$instance\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "title": "Request Rate by View",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(django_http_requests_total_by_view_transport_method_total{job=~\"$job\"}[5m])) by (view)",
+          "legendFormat": "{{view}}"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "title": "DB Query Latency p95",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(django_db_execute_many_duration_seconds_bucket{job=~\"$job\"}[5m])) by (le, vendor))",
+          "legendFormat": "{{vendor}}"
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "title": "Top Slow Views (avg latency)",
+      "type": "table",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "topk(10, sum(rate(django_http_requests_latency_seconds_sum{job=~\"$job\"}[5m])) by (view) / clamp_min(sum(rate(django_http_requests_latency_seconds_count{job=~\"$job\"}[5m])) by (view), 1))",
+          "format": "table",
+          "legendFormat": "{{view}}"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["soroscan", "performance", "analysis"],
+  "templating": {
+    "list": [
+      {
+        "name": "job",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(django_http_requests_latency_seconds_count, job)",
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(django_http_requests_latency_seconds_count{job=~\"$job\"}, instance)",
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "SoroScan - Performance Analysis",
+  "uid": "soroscan-performance-template",
+  "version": 1
+}
