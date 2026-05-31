@@ -100,6 +100,21 @@ Or add to your Helm chart's `postgresql.conf` override.
 
 ---
 
+## Automated Backup Testing
+
+`test_backup.py` validates backup integrity and performs restoration tests.
+
+```bash
+python test_backup.py full-test
+python test_backup.py verify-only
+python test_backup.py restore-only --s3-key=pg-backups/<key>
+python test_backup.py --runbook
+```
+
+Set `SLACK_WEBHOOK_URL` to receive alerts on failure.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Description |

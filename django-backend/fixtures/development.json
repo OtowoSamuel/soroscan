@@ -1,0 +1,241 @@
+{
+    "version": "1.0",
+    "description": "Development seed data for SoroScan database",
+    "organizations": [
+        {
+            "name": "Acme DeFi",
+            "slug": "acme-defi",
+            "owner_email": "admin@acme.example.com",
+            "settings": {},
+            "quota": 10000
+        },
+        {
+            "name": "Beta Labs",
+            "slug": "beta-labs",
+            "owner_email": "admin@beta.example.com",
+            "settings": {},
+            "quota": 5000
+        },
+        {
+            "name": "Gamma Finance",
+            "slug": "gamma-finance",
+            "owner_email": "admin@gamma.example.com",
+            "settings": {},
+            "quota": 0
+        }
+    ],
+    "teams": [
+        {
+            "name": "DeFi Team",
+            "organization_slug": "acme-defi",
+            "created_by_email": "admin@acme.example.com"
+        },
+        {
+            "name": "NFT Team",
+            "organization_slug": "acme-defi",
+            "created_by_email": "admin@acme.example.com"
+        },
+        {
+            "name": "Core Team",
+            "organization_slug": "beta-labs",
+            "created_by_email": "admin@beta.example.com"
+        }
+    ],
+    "users": [
+        {
+            "email": "admin@acme.example.com",
+            "password": "testpass123",
+            "first_name": "Alice",
+            "last_name": "Admin"
+        },
+        {
+            "email": "dev@acme.example.com",
+            "password": "testpass123",
+            "first_name": "Bob",
+            "last_name": "Developer"
+        },
+        {
+            "email": "admin@beta.example.com",
+            "password": "testpass123",
+            "first_name": "Charlie",
+            "last_name": "Beta"
+        },
+        {
+            "email": "analyst@gamma.example.com",
+            "password": "testpass123",
+            "first_name": "Diana",
+            "last_name": "Analyst"
+        }
+    ],
+    "memberships": [
+        {"user_email": "admin@acme.example.com", "organization_slug": "acme-defi", "role": "owner"},
+        {"user_email": "dev@acme.example.com", "organization_slug": "acme-defi", "role": "admin"},
+        {"user_email": "admin@beta.example.com", "organization_slug": "beta-labs", "role": "owner"},
+        {"user_email": "analyst@gamma.example.com", "organization_slug": "gamma-finance", "role": "member"}
+    ],
+    "team_memberships": [
+        {"user_email": "admin@acme.example.com", "team_name": "DeFi Team", "role": "owner"},
+        {"user_email": "dev@acme.example.com", "team_name": "DeFi Team", "role": "member"},
+        {"user_email": "dev@acme.example.com", "team_name": "NFT Team", "role": "admin"},
+        {"user_email": "admin@beta.example.com", "team_name": "Core Team", "role": "owner"}
+    ],
+    "contracts": [
+        {
+            "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ2KZ",
+            "name": "Stablecoin Swap",
+            "alias": "",
+            "description": "Automated market maker for stablecoin pairs",
+            "owner_email": "admin@acme.example.com",
+            "organization_slug": "acme-defi",
+            "team_name": "DeFi Team",
+            "abi_schema": {
+                "events": [
+                    {"name": "swap", "params": ["amount_in", "amount_out", "trader"]},
+                    {"name": "liquidity_added", "params": ["provider", "amount"]},
+                    {"name": "liquidity_removed", "params": ["provider", "amount"]}
+                ]
+            },
+            "event_filter_type": "none",
+            "event_filter_list": []
+        },
+        {
+            "contract_id": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBZ2KZ",
+            "name": "Lending Protocol",
+            "alias": "Acme Lending",
+            "description": "Overcollateralized lending and borrowing",
+            "owner_email": "admin@acme.example.com",
+            "organization_slug": "acme-defi",
+            "team_name": "DeFi Team",
+            "abi_schema": {
+                "events": [
+                    {"name": "deposit", "params": ["user", "asset", "amount"]},
+                    {"name": "withdraw", "params": ["user", "asset", "amount"]},
+                    {"name": "borrow", "params": ["user", "asset", "amount"]},
+                    {"name": "repay", "params": ["user", "asset", "amount"]},
+                    {"name": "liquidate", "params": ["user", "asset", "amount"]}
+                ]
+            },
+            "event_filter_type": "whitelist",
+            "event_filter_list": ["deposit", "withdraw", "borrow", "repay", "liquidate"]
+        },
+        {
+            "contract_id": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCZ2KZ",
+            "name": "NFT Collection",
+            "alias": "Beta NFTs",
+            "description": "NFT minting and marketplace contract",
+            "owner_email": "dev@acme.example.com",
+            "organization_slug": "acme-defi",
+            "team_name": "NFT Team",
+            "abi_schema": {
+                "events": [
+                    {"name": "mint", "params": ["token_id", "owner"]},
+                    {"name": "transfer", "params": ["from", "to", "token_id"]},
+                    {"name": "sale", "params": ["token_id", "price", "seller"]}
+                ]
+            },
+            "event_filter_type": "none",
+            "event_filter_list": []
+        },
+        {
+            "contract_id": "CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDZ2KZ",
+            "name": "Bridge Contract",
+            "alias": "",
+            "description": "Cross-chain asset bridge",
+            "owner_email": "admin@beta.example.com",
+            "organization_slug": "beta-labs",
+            "team_name": "Core Team",
+            "abi_schema": null,
+            "event_filter_type": "blacklist",
+            "event_filter_list": ["dust_event"]
+        },
+        {
+            "contract_id": "CEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEZ2KZ",
+            "name": "Governance Token",
+            "alias": "GOV Token",
+            "description": "Protocol governance token with voting",
+            "owner_email": "admin@beta.example.com",
+            "organization_slug": "beta-labs",
+            "team_name": "Core Team",
+            "abi_schema": {
+                "events": [
+                    {"name": "transfer", "params": ["from", "to", "amount"]},
+                    {"name": "approval", "params": ["owner", "spender", "amount"]},
+                    {"name": "vote_cast", "params": ["voter", "proposal_id", "support"]}
+                ]
+            },
+            "event_filter_type": "none",
+            "event_filter_list": []
+        }
+    ],
+    "events": {
+        "per_contract": 20,
+        "contracts": ["CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ2KZ", "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBZ2KZ"],
+        "event_types": ["swap", "deposit", "withdraw", "borrow", "liquidity_added"],
+        "days_back": 14
+    },
+    "webhooks": [
+        {
+            "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ2KZ",
+            "event_type": "swap",
+            "target_url": "https://example.com/webhook/swaps",
+            "timeout_seconds": 10,
+            "retry_backoff_strategy": "exponential",
+            "retry_backoff_seconds": 60,
+            "signature_algorithm": "sha256"
+        },
+        {
+            "contract_id": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBZ2KZ",
+            "event_type": "liquidation",
+            "target_url": "https://example.com/webhook/liquidations",
+            "timeout_seconds": 15,
+            "retry_backoff_strategy": "linear",
+            "retry_backoff_seconds": 30,
+            "signature_algorithm": "sha256"
+        },
+        {
+            "contract_id": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCZ2KZ",
+            "event_type": "",
+            "target_url": "https://example.com/webhook/nft-events",
+            "timeout_seconds": 10,
+            "retry_backoff_strategy": "fixed",
+            "retry_backoff_seconds": 120,
+            "signature_algorithm": "sha1"
+        }
+    ],
+    "webhook_delivery_logs": {
+        "per_webhook": 5,
+        "status_codes": [200, 200, 200, 500, 408]
+    },
+    "alert_rules": [
+        {
+            "contract_id": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBZ2KZ",
+            "name": "High Liquidation Alert",
+            "condition": {"op": "gt", "field": "amount", "value": 100000},
+            "channels": [{"type": "slack", "target": "https://hooks.slack.com/services/TEST"}],
+            "action_type": "webhook",
+            "action_target": "https://example.com/alerts/liquidations"
+        },
+        {
+            "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ2KZ",
+            "name": "Large Swap Alert",
+            "condition": {"op": "gt", "field": "amount_in", "value": 50000},
+            "channels": [],
+            "action_type": "email",
+            "action_target": "ops@acme.example.com"
+        }
+    ],
+    "api_keys": [
+        {
+            "user_email": "admin@acme.example.com",
+            "team_name": "DeFi Team",
+            "name": "Production Key",
+            "tier": "enterprise"
+        },
+        {
+            "user_email": "dev@acme.example.com",
+            "team_name": null,
+            "name": "Dev Key",
+            "tier": "free"
+        }
+    ]
+}
