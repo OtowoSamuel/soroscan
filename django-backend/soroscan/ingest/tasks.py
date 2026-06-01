@@ -39,6 +39,7 @@ from .cache_utils import (
     _SENTINEL,
 )
 from .models import (
+    BlacklistedContract,
     ContractABI,
     ContractEvent,
     ContractSigningKey,
@@ -58,6 +59,7 @@ from .models import (
     OrganizationCostSnapshot,
     WebhookDeadLetter,
 )
+from stellar_sdk import SorobanServer
 from .rate_limit import check_ingest_rate
 from .stellar_client import SorobanClient
 from .metrics import webhook_payload_bytes
@@ -1963,8 +1965,6 @@ def ingest_latest_events() -> int:
     """
     Sync events from Horizon/Soroban RPC.
     """
-    from stellar_sdk import SorobanServer
-
     _start = time.monotonic()
     m = _get_metrics()
 
@@ -1977,11 +1977,22 @@ def ingest_latest_events() -> int:
     new_events = 0
 
     try:
-        contract_ids = list(
+        blacklisted_ids = set(
+            BlacklistedContract.objects.values_list("contract_id", flat=True)
+        )
+        all_active_ids = list(
             TrackedContract.objects.filter(is_active=True).values_list(
                 "contract_id", flat=True
             )
         )
+        for cid in all_active_ids:
+            if cid in blacklisted_ids:
+                logger.info(
+                    "Skipping blacklisted contract %s — not indexing events",
+                    cid,
+                    extra={"contract_id": cid, "reason": "blacklisted"},
+                )
+        contract_ids = [cid for cid in all_active_ids if cid not in blacklisted_ids]
 
         # Always update the gauge, even when there are no active contracts.
         m.active_contracts_gauge.set(len(contract_ids))
