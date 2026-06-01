@@ -15,6 +15,8 @@ export interface Webhook {
   url: string
   eventTypes: EventType[]
   contractFilter?: string
+  /** Serialized filter expression built by the visual filter builder */
+  filterExpression?: string
   status: WebhookStatus
   createdAt: string
   lastDelivery?: string
