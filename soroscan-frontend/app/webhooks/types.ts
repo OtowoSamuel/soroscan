@@ -25,6 +25,7 @@ export interface Webhook {
   successRate: number // 0–100
   timeoutSeconds: number
   secret: string
+  customHeaders?: Record<string, string>
   totalDeliveries: number
   failureCount?: number
   lastDeliverySuccess?: boolean

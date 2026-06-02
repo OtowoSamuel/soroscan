@@ -328,7 +328,16 @@ class ContractEventViewSet(viewsets.ReadOnlyModelViewSet):
     }
 
     def get_queryset(self):
-        return ContractEvent.objects.select_related("contract").all()
+        qs = ContractEvent.objects.select_related("contract").all()
+        
+        # Support comma-separated 'type' filter (Issue #476)
+        event_types = self.request.query_params.get("type")
+        if event_types:
+            types_list = [t.strip() for t in event_types.split(",") if t.strip()]
+            if types_list:
+                qs = qs.filter(event_type__in=types_list)
+                
+        return qs
 
     @extend_schema(
         parameters=[

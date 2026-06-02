@@ -50,6 +50,9 @@ export function CreateWebhookModal({ isOpen, onClose, onCreate }: CreateWebhookM
   const [filterExpressionStr, setFilterExpressionStr] = React.useState<string>("")
   const [filterBuilderOpen, setFilterBuilderOpen] = React.useState(false)
 
+  // Custom headers state
+  const [customHeaders, setCustomHeaders] = React.useState<{key: string, value: string}[]>([])
+
   const urlValid = isValidUrl(url)
   const timeoutValue = Number(timeoutInput)
   const timeoutValid = Number.isInteger(timeoutValue) && timeoutValue >= 5 && timeoutValue <= 60
@@ -77,6 +80,26 @@ export function CreateWebhookModal({ isOpen, onClose, onCreate }: CreateWebhookM
     setFilterExpressionStr("")
   }
 
+  const handleAddHeader = () => {
+    setCustomHeaders([...customHeaders, { key: "", value: "" }])
+  }
+
+  const handleRemoveHeader = (index: number) => {
+    setCustomHeaders(customHeaders.filter((_, i) => i !== index))
+  }
+
+  const updateHeader = (index: number, field: 'key' | 'value', val: string) => {
+    const newHeaders = [...customHeaders]
+    newHeaders[index][field] = val
+    setCustomHeaders(newHeaders)
+  }
+
+  const getHeaderError = (key: string) => {
+    if (key.toLowerCase().startsWith('x-soroscan-')) return "Reserved prefix 'X-SoroScan-' cannot be used."
+    if (key.toLowerCase() === 'authorization') return "Use secure secrets instead of raw Authorization headers."
+    return null
+  }
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!urlValid) { setUrlTouched(true); return }
@@ -85,6 +108,19 @@ export function CreateWebhookModal({ isOpen, onClose, onCreate }: CreateWebhookM
       setTimeoutTouched(true)
       return
     }
+
+    // Format headers to Record<string, string>
+    const headerRecord: Record<string, string> = {}
+    let hasHeaderErrors = false
+    customHeaders.forEach(h => {
+      if (h.key.trim() && !getHeaderError(h.key)) {
+        headerRecord[h.key.trim()] = h.value.trim()
+      } else if (getHeaderError(h.key)) {
+        hasHeaderErrors = true
+      }
+    })
+
+    if (hasHeaderErrors) return // Stop submission if invalid headers exist
 
     setSubmitting(true)
     setTimeout(() => {
@@ -95,11 +131,13 @@ export function CreateWebhookModal({ isOpen, onClose, onCreate }: CreateWebhookM
         status,
         timeoutSeconds: timeoutValue,
         filterExpression: filterExpressionStr || undefined,
+        customHeaders: Object.keys(headerRecord).length > 0 ? headerRecord : undefined,
       })
       // reset
       setUrl(""); setUrlTouched(false); setSelectedTypes(["ALL"])
       setContractFilter(""); setStatus("ACTIVE"); setTimeoutInput("30"); setTimeoutTouched(false)
       setFilterExpression(undefined); setFilterExpressionStr("")
+      setCustomHeaders([])
       setSubmitting(false)
       onClose()
     }, 600)
@@ -109,6 +147,7 @@ export function CreateWebhookModal({ isOpen, onClose, onCreate }: CreateWebhookM
     setUrl(""); setUrlTouched(false); setSelectedTypes(["ALL"])
     setContractFilter(""); setStatus("ACTIVE"); setTimeoutInput("30"); setTimeoutTouched(false)
     setFilterExpression(undefined); setFilterExpressionStr("")
+    setCustomHeaders([])
     onClose()
   }
 
@@ -256,6 +295,50 @@ export function CreateWebhookModal({ isOpen, onClose, onCreate }: CreateWebhookM
             <p className="text-[9px] text-terminal-gray/60 ml-1">
               Define custom field conditions to filter which events trigger this webhook.
             </p>
+          </div>
+
+          {/* Custom Headers */}
+          <div className="space-y-2">
+            <div className="flex justify-between items-center">
+              <div className="text-xs text-terminal-cyan uppercase tracking-wider ml-1">CUSTOM_HEADERS</div>
+              <button type="button" onClick={handleAddHeader} className="text-[10px] text-terminal-green hover:underline">
+                + ADD_HEADER
+              </button>
+            </div>
+            
+            {customHeaders.length === 0 && (
+              <p className="text-[9px] text-terminal-gray/60 ml-1">No custom headers. Payload will include default SoroScan signatures.</p>
+            )}
+            
+            <div className="space-y-2">
+              {customHeaders.map((header, i) => {
+                const error = getHeaderError(header.key)
+                return (
+                  <div key={i} className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="Header-Key"
+                        value={header.key}
+                        onChange={(e) => updateHeader(i, 'key', e.target.value)}
+                        className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono text-zinc-300 outline-none focus:border-terminal-green"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Value"
+                        value={header.value}
+                        onChange={(e) => updateHeader(i, 'value', e.target.value)}
+                        className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono text-zinc-300 outline-none focus:border-terminal-green"
+                      />
+                      <button type="button" onClick={() => handleRemoveHeader(i)} className="text-terminal-danger hover:text-red-400 p-1">
+                        ✕
+                      </button>
+                    </div>
+                    {error && <span className="text-[9px] text-terminal-danger ml-1">{error}</span>}
+                  </div>
+                )
+              })}
+            </div>
           </div>
 
           {/* Status */}

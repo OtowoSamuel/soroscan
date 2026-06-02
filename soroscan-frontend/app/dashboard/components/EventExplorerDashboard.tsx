@@ -50,7 +50,16 @@ export function EventExplorerDashboard() {
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [filteredEvents, setFilteredEvents] = useState<EventRecord[]>([]);
   const [eventTags, setEventTags] = useState<EventTagMap>({});
+  
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem(PAGE_SIZE_STORAGE_KEY);
+      return stored ? parseInt(stored, 10) : DEFAULT_PAGE_SIZE;
+    }
+    return DEFAULT_PAGE_SIZE;
+  });
+
   const [hasNext, setHasNext] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +68,11 @@ export function EventExplorerDashboard() {
   const [isPaused, setIsPaused] = useState(false);
   const [newEventsCount, setNewEventsCount] = useState(0);
   const previousEventsRef = useRef<EventRecord[]>([]);
+
+  // ── Persist page size ──────────────────────────────────────────────────────
+  useEffect(() => {
+    localStorage.setItem(PAGE_SIZE_STORAGE_KEY, pageSize.toString());
+  }, [pageSize]);
 
   // ── Multi-select state ─────────────────────────────────────────────────────
   /**
@@ -278,13 +292,13 @@ export function EventExplorerDashboard() {
         fetchExplorerEvents({
           contractId: filters.contractId,
           eventType: filters.eventType || null,
-          limit: PAGE_SIZE + 1,
+          limit: pageSize + 1,
           offset: 0,
           since: filters.since || null,
           until: filters.until || null,
         }).then(result => {
-          const nextExists = result.length > PAGE_SIZE;
-          const visibleEvents = nextExists ? result.slice(0, PAGE_SIZE) : result;
+          const nextExists = result.length > pageSize;
+          const visibleEvents = nextExists ? result.slice(0, pageSize) : result;
           setEvents(visibleEvents);
           setHasNext(nextExists);
         });
@@ -378,6 +392,7 @@ export function EventExplorerDashboard() {
   const hasActiveFilters = Boolean(
     filters.eventType || filters.since || filters.until || filters.searchQuery || filters.tags.length
   );
+  
   const handleExport = useCallback(
     (format: "csv" | "json") => {
       const dataToExport = filteredEvents;
@@ -435,7 +450,7 @@ export function EventExplorerDashboard() {
   const handlePageSizeChange = useCallback((newSize: number) => {
     setPageSize(newSize);
     setCurrentPage(1);
-  }, [setPageSize]);
+  }, []);
 
   const startIndex = (currentPage - 1) * pageSize + 1;
   const endIndex = startIndex + filteredEvents.length - 1;

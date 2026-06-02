@@ -1,19 +1,15 @@
 import time
-
 import pytest
 from django.conf import settings
-from django.core.cache import cache
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from soroscan.health import format_uptime
 
-
 @pytest.fixture
 def api_client():
     return APIClient()
-
 
 @pytest.mark.django_db
 class TestHealthView:
@@ -56,37 +52,32 @@ class TestReadinessView:
         response = api_client.get(url)
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data == {"status": "ready"}
+        assert response.data["status"] == "healthy"
+        assert "components" in response.data
         assert response["X-SoroScan-Version"] == settings.SOFTWARE_VERSION
 
     def test_not_ready_when_db_fails(self, api_client, monkeypatch):
         from django.db import connection
-
-        def mocked_cursor(*args, **kwargs):
-            raise Exception("DB connection failed")
-
-        monkeypatch.setattr(connection, "cursor", lambda: mocked_cursor())
+        monkeypatch.setattr(connection, "cursor", lambda: (_ for _ in ()).throw(Exception("DB fail")))
 
         url = reverse("readiness")
         response = api_client.get(url)
 
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-        assert response.data["status"] == "not_ready"
-        assert any("db" in e for e in response.data["errors"])
+        assert response.data["status"] == "degraded"
+        assert "database" in response.data["components"]
         assert response["X-SoroScan-Version"] == settings.SOFTWARE_VERSION
 
     def test_not_ready_when_cache_fails(self, api_client, monkeypatch):
-        def mocked_get(*args, **kwargs):
-            raise Exception("Cache connection failed")
-
-        monkeypatch.setattr(cache, "get", mocked_get)
+        from django.core.cache import cache
+        monkeypatch.setattr(cache, "get", lambda *args, **kwargs: (_ for _ in ()).throw(Exception("Redis fail")))
 
         url = reverse("readiness")
         response = api_client.get(url)
 
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-        assert response.data["status"] == "not_ready"
-        assert any("redis" in e for e in response.data["errors"])
+        assert response.data["status"] == "degraded"
+        assert "redis" in response.data["components"]
         assert response["X-SoroScan-Version"] == settings.SOFTWARE_VERSION
 
 

@@ -795,6 +795,13 @@ class WebhookSubscription(models.Model):
     class Meta:
         ordering = ["-created_at"]
 
+        constraints = [
+            models.UniqueConstraint(
+                fields=["target_url", "contract"],
+                name="unique_url_contract_subscription",
+            )
+        ]
+
     def __str__(self):
         return f"Webhook -> {self.target_url} ({self.contract.name})"
 

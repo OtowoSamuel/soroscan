@@ -337,37 +337,35 @@ class WebhookSubscriptionSerializer(serializers.ModelSerializer):
         if not isinstance(value, dict):
             raise serializers.ValidationError("filter_condition must be an object.")
 
-        allowed_ops = {"and", "or", "not", "eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "startswith", "regex"}
 
-        def _validate(node: dict):
-            if not isinstance(node, dict):
-                raise serializers.ValidationError("Each condition node must be an object.")
-            op = str(node.get("op", "")).lower()
-            if op not in allowed_ops:
-                raise serializers.ValidationError(f"Unsupported operator: {op}")
+    def validate(self, attrs):
+            contract = attrs.get("contract")
+            if not contract and self.instance:
+                contract = self.instance.contract
+                
+            target_url = attrs.get("target_url")
+            if not target_url and self.instance:
+                target_url = self.instance.target_url
 
-            if op in {"and", "or"}:
-                conditions = node.get("conditions")
-                if not isinstance(conditions, list) or not conditions:
-                    raise serializers.ValidationError(f"'{op}' requires a non-empty conditions array.")
-                for sub in conditions:
-                    _validate(sub)
-                return
+            # Check for duplicates (Issue #474)
+            if contract and target_url:
+                qs = WebhookSubscription.objects.filter(contract=contract, target_url=target_url)
+                if self.instance:
+                    qs = qs.exclude(pk=self.instance.pk)
+                if qs.exists():
+                    raise serializers.ValidationError({
+                        "target_url": "A webhook subscription for this URL and contract already exists."
+                    })
 
-            if op == "not":
-                condition = node.get("condition")
-                if not isinstance(condition, dict):
-                    raise serializers.ValidationError("'not' requires a condition object.")
-                _validate(condition)
-                return
-
-            if "field" not in node:
-                raise serializers.ValidationError(f"'{op}' requires a field.")
-            if "value" not in node:
-                raise serializers.ValidationError(f"'{op}' requires a value.")
-
-        _validate(value)
-        return value
+            if contract:
+                estimated_size = contract.metadata.get("estimated_payload_size", 0)
+                if estimated_size > 1048576:  # 1MB
+                    raise serializers.ValidationError({"contract": "Estimated payload exceeds 1MB limit."})
+                    
+                if contract.metadata.get("is_massive", False):
+                    raise serializers.ValidationError({"contract": "Contract events are known to be massive."})
+                    
+            return attrs
 
     def validate_escalation_policy(self, value):
         if value in (None, []):
@@ -401,20 +399,6 @@ class WebhookSubscriptionSerializer(serializers.ModelSerializer):
                 )
         return value
 
-    def validate(self, attrs):
-        contract = attrs.get("contract")
-        if not contract and self.instance:
-            contract = self.instance.contract
-            
-        if contract:
-            estimated_size = contract.metadata.get("estimated_payload_size", 0)
-            if estimated_size > 1048576:  # 1MB
-                raise serializers.ValidationError({"contract": "Estimated payload exceeds 1MB limit."})
-                
-            if contract.metadata.get("is_massive", False):
-                raise serializers.ValidationError({"contract": "Contract events are known to be massive."})
-                
-        return attrs
 
 class RecordEventRequestSerializer(serializers.Serializer):
     """

@@ -586,3 +586,10 @@ DEPRECATED_ENDPOINTS = {
         "replacement": "/graphql/"
     }
 }
+
+if 'test' in sys.argv:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        }
+    }
