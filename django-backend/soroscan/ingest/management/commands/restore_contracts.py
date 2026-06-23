@@ -25,7 +25,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--input",
             required=True,
-            help="Input file path (use - for stdin)",
+            help="Input file path (use - for stdout)",
         )
         parser.add_argument(
             "--dry-run",

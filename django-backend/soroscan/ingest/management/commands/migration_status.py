@@ -32,7 +32,8 @@ class Command(BaseCommand):
             sys.exit(1)
         
         disk_migrations = set(loader.disk_migrations.keys())
-        applied_migrations = loader.applied_migrations
+        # applied_migrations is a dict keyed by (app_label, name); convert to a set of keys
+        applied_migrations = set(loader.applied_migrations.keys())
         
         apps = sorted(set(app_label for app_label, _ in disk_migrations))
 
