@@ -295,6 +295,7 @@ event_payload_compression_ratio = _get_or_create(
     "soroscan_event_payload_compression_ratio",
     "Observed compressed-to-raw size ratio for stored event payloads",
     buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.25, 1.5),
+)
 circuit_breaker_state_gauge = _get_or_create(
     Gauge,
     "soroscan_circuit_breaker_state",
