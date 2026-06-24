@@ -41,6 +41,9 @@ __all__ = [
     "missing_events_total",
     "event_ingestion_rate_gauge",
     "event_payload_compression_ratio",
+    "circuit_breaker_state_gauge",
+    "circuit_breaker_trips_total",
+    "circuit_breaker_calls_total",
 ]
 
 
@@ -292,4 +295,23 @@ event_payload_compression_ratio = _get_or_create(
     "soroscan_event_payload_compression_ratio",
     "Observed compressed-to-raw size ratio for stored event payloads",
     buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.25, 1.5),
+circuit_breaker_state_gauge = _get_or_create(
+    Gauge,
+    "soroscan_circuit_breaker_state",
+    "Circuit breaker state (0=closed, 1=half_open, 2=open)",
+    ["name"],
+)
+
+circuit_breaker_trips_total = _get_or_create(
+    Counter,
+    "soroscan_circuit_breaker_trips_total",
+    "Number of times a circuit breaker opened",
+    ["name"],
+)
+
+circuit_breaker_calls_total = _get_or_create(
+    Counter,
+    "soroscan_circuit_breaker_calls_total",
+    "Circuit breaker protected call outcomes",
+    ["name", "outcome"],
 )

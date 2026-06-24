@@ -1,0 +1,101 @@
+name: Load Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  k6-smoke:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_soroscan
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Django dependencies
+        working-directory: django-backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Start API server
+        working-directory: django-backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_soroscan
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci
+          DEBUG: "False"
+          DJANGO_SETTINGS_MODULE: soroscan.settings_test
+          CELERY_TASK_ALWAYS_EAGER: "True"
+          SOROBAN_RPC_URL: https://soroban-testnet.stellar.org
+          STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+          SOROSCAN_CONTRACT_ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM
+          INDEXER_SECRET_KEY: ""
+        run: |
+          python manage.py migrate --noinput
+          python manage.py runserver 0.0.0.0:8000 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8000/api/ingest/health/ > /dev/null; then
+              echo "API ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API failed to start"
+          exit 1
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+
+      - name: Run smoke load test
+        env:
+          BASE_URL: http://127.0.0.1:8000
+          K6_VUS: "3"
+          K6_DURATION: "15s"
+          K6_REPORT_PATH: load-tests/results/ci-smoke-summary.json
+        run: |
+          mkdir -p load-tests/results
+          k6 run load-tests/k6/smoke.js
+
+      - name: Upload load test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-smoke-report
+          path: load-tests/results/ci-smoke-summary.json

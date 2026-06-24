@@ -28,6 +28,7 @@ from .views import (
     restore_archived_events,
     transaction_events_view,
     vulnerability_impact_view,
+    webhook_signing_public_key_view,
 )
 
 router = DefaultRouter()
@@ -66,6 +67,11 @@ urlpatterns = [
         "contracts/<str:contract_id>/vulnerability-impact/",
         vulnerability_impact_view,
         name="contract-vulnerability-impact",
+    ),
+    path(
+        "webhooks/signing-public-key/",
+        webhook_signing_public_key_view,
+        name="webhook-signing-public-key",
     ),
     path("", include(router.urls)),
     path("record/", record_event_view, name="record-event"),

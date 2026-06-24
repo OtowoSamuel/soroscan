@@ -10,6 +10,8 @@ from typing import Any, Optional
 from django.conf import settings
 from stellar_sdk import Keypair, TransactionBuilder
 from stellar_sdk.soroban_server import SorobanServer
+
+from soroscan.circuit_breaker import execute_with_circuit_breaker
 from stellar_sdk.xdr import (
     SCVal,
     SCValType,
@@ -300,7 +302,9 @@ class SorobanClient:
         pagination = {"limit": 200}
 
         try:
-            response = self.server.get_events(
+            response = execute_with_circuit_breaker(
+                "soroban_rpc",
+                self.server.get_events,
                 start_ledger=start_ledger,
                 end_ledger=end_ledger,
                 filters=filters,
@@ -308,7 +312,9 @@ class SorobanClient:
             )
         except TypeError:
             # Some SDK variants do not support end_ledger.
-            response = self.server.get_events(
+            response = execute_with_circuit_breaker(
+                "soroban_rpc",
+                self.server.get_events,
                 start_ledger=start_ledger,
                 filters=filters,
                 pagination=pagination,
@@ -439,7 +445,11 @@ class SorobanClient:
 
         try:
             # Fetch transaction from RPC
-            tx_response = self.server.get_transaction(tx_hash)
+            tx_response = execute_with_circuit_breaker(
+                "soroban_rpc",
+                self.server.get_transaction,
+                tx_hash,
+            )
 
             if not tx_response or getattr(tx_response, "status", None) == "NOT_FOUND":
                 return InvocationData(

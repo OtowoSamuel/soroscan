@@ -174,6 +174,12 @@ EVENT_STREAMING = {
 
 # GraphQL Introspection — enabled in tests/dev
 GRAPHQL_INTROSPECTION_ENABLED = True
+GRAPHQL_MAX_COMPLEXITY = 1000
+
+# Fixed test seed for deterministic webhook signature tests.
+WEBHOOK_ED25519_SIGNING_SEED = (
+    "0000000000000000000000000000000000000000000000000000000000000001"
+)
 
 # Logging
 LOGGING = {
