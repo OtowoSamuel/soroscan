@@ -1,4 +1,5 @@
 export { SoroScanClient, SoroScanError, Paginator } from "./client.js";
+export { verifyWebhookSignature } from "./webhookVerification.js";
 export type {
   // Config
   SoroScanClientConfig,

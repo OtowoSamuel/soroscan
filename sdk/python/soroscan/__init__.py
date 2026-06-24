@@ -20,6 +20,7 @@ from soroscan.exceptions import (
     SoroScanRateLimitError,
     SoroScanValidationError,
 )
+from soroscan.webhook_verification import verify_webhook_signature
 from soroscan.models import (
     ContractEvent,
     ContractStats,
@@ -49,4 +50,5 @@ __all__ = [
     "SoroScanNotFoundError",
     "SoroScanRateLimitError",
     "SoroScanValidationError",
+    "verify_webhook_signature",
 ]

@@ -25,6 +25,7 @@ from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 import requests as http_requests
 
 from soroscan.throttles import IngestRateThrottle
+from soroscan.webhook_signing import build_x_signature_header, public_key_base64
 
 from .cache_utils import cache_result, get_or_set_json, query_cache_ttl, stable_cache_key
 from .models import (
@@ -599,6 +600,10 @@ class WebhookSubscriptionViewSet(viewsets.ModelViewSet):
             "X-SoroScan-Signature": f"{prefix}={sig_hex}",
             "X-SoroScan-Timestamp": timezone.now().isoformat(),
         }
+        try:
+            headers["X-Signature"] = build_x_signature_header(payload_bytes)
+        except ValueError:
+            pass
 
         try:
             http_requests.post(
@@ -869,6 +874,31 @@ def record_event_view(request):
             {"status": "error", "error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@extend_schema(
+    responses=inline_serializer(
+        name="WebhookSigningPublicKeyResponse",
+        fields={
+            "algorithm": serializers.CharField(),
+            "public_key": serializers.CharField(),
+            "header": serializers.CharField(),
+            "format": serializers.CharField(),
+        },
+    )
+)
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def webhook_signing_public_key_view(request):
+    """Return the platform Ed25519 public key used for webhook X-Signature headers."""
+    return Response(
+        {
+            "algorithm": "ed25519",
+            "public_key": public_key_base64(),
+            "header": "X-Signature",
+            "format": "ed25519=<base64-signature>",
+        }
+    )
 
 
 @extend_schema(
