@@ -38,6 +38,7 @@ from .cache_utils import (
     get_cached_contract,
     _SENTINEL,
 )
+from .telemetry import inject_trace_headers, payload_compression_ratio, tracer
 from .models import (
     BlacklistedContract,
     ContractABI,
@@ -446,26 +447,34 @@ def validate_contract_payload_schema(
 
     Returns True when no schema is configured or payload passes validation.
     """
-    if contract.json_schema in (None, {}):
-        return True
+    with tracer.start_as_current_span(
+        "ingest.validate_contract_payload_schema",
+        attributes={
+            "contract_id": contract.contract_id,
+            "event_type": event_type,
+            "ledger": ledger or 0,
+        },
+    ):
+        if contract.json_schema in (None, {}):
+            return True
 
-    try:
-        jsonschema.validate(instance=payload, schema=contract.json_schema)
-        return True
-    except jsonschema.ValidationError as exc:
-        logger.error(
-            "Contract JSON schema validation failed for contract_id=%s event_type=%s ledger=%s: %s",
-            contract.contract_id,
-            event_type,
-            ledger,
-            exc.message,
-            extra={
-                "contract_id": contract.contract_id,
-                "event_type": event_type,
-                "ledger": ledger,
-            },
-        )
-        return False
+        try:
+            jsonschema.validate(instance=payload, schema=contract.json_schema)
+            return True
+        except jsonschema.ValidationError as exc:
+            logger.error(
+                "Contract JSON schema validation failed for contract_id=%s event_type=%s ledger=%s: %s",
+                contract.contract_id,
+                event_type,
+                ledger,
+                exc.message,
+                extra={
+                    "contract_id": contract.contract_id,
+                    "event_type": event_type,
+                    "ledger": ledger,
+                },
+            )
+            return False
 
 
 def _load_signing_public_key(key: ContractSigningKey):
@@ -557,109 +566,118 @@ def _upsert_contract_event(
     client: SorobanClient | None = None,
     batch_cache: dict | None = None,
 ) -> tuple[ContractEvent, bool]:
-    # Check rate limit before processing
-    if not check_ingest_rate(contract):
-        m = _get_metrics()
-        m.events_rate_limited_total.labels(
-            contract_id=_short_contract_id(contract.contract_id),
-            network=_network_label(),
-        ).inc()
-        logger.warning(
-            "Rate limit exceeded for contract %s — skipping event",
-            contract.contract_id,
-            extra={"contract_id": contract.contract_id},
-        )
-        # Return a dummy tuple to indicate the event was skipped
-        return (None, False)
-
-    ledger = _safe_int(_event_attr(event, "ledger", "ledger_sequence"), default=0)
-    event_index = _extract_event_index(event, fallback_event_index)
-    tx_hash = str(_event_attr(event, "tx_hash", "transaction_hash", default="") or "")
-    event_type = str(
-        _event_attr(event, "type", "event_type", default="unknown") or "unknown"
-    )
-
-    # Check whitelist/blacklist filter before persisting
-    if not contract.should_ingest_event(event_type):
-        m = _get_metrics()
-        m.events_filtered_total.labels(
-            contract_id=_short_contract_id(contract.contract_id),
-            network=_network_label(),
-            filter_type=contract.event_filter_type,
-            event_type=event_type,
-        ).inc()
-        logger.debug(
-            "Event type '%s' filtered (%s) for contract %s — skipping",
-            event_type,
-            contract.event_filter_type,
-            contract.contract_id,
-            extra={"contract_id": contract.contract_id, "event_type": event_type},
-        )
-        return (None, False)
-
-    payload = _event_attr(event, "value", "payload", default={}) or {}
-
-    if not validate_contract_payload_schema(
-        contract, payload, event_type, ledger=ledger
-    ):
-        m = _get_metrics()
-        m.events_validation_failures_total.labels(
-            contract_id=_short_contract_id(contract.contract_id),
-            network=_network_label(),
-        ).inc()
-        return (None, False)
-
-    raw_xdr = str(_event_attr(event, "xdr", "raw_xdr", default="") or "")
-    signature_status = resolve_signature_status(contract, event, payload)
-
-    timestamp = _event_attr(event, "timestamp", default=timezone.now())
-    if isinstance(timestamp, datetime) and timezone.is_naive(timestamp):
-        timestamp = timezone.make_aware(timestamp, dt_timezone.utc)
-    if not isinstance(timestamp, datetime):
-        timestamp = timezone.now()
-
-    result = ContractEvent.objects.update_or_create(
-        contract=contract,
-        ledger=ledger,
-        event_index=event_index,
-        defaults={
-            "tx_hash": tx_hash,
-            "event_type": event_type,
-            "payload": payload,
-            "timestamp": timestamp,
-            "raw_xdr": raw_xdr,
-            "signature_status": signature_status,
+    with tracer.start_as_current_span(
+        "ingest.upsert_contract_event",
+        attributes={
+            "contract_id": contract.contract_id,
+            "network": _network_label(),
         },
-    )
+    ):
+        # Check rate limit before processing
+        if not check_ingest_rate(contract):
+            m = _get_metrics()
+            m.events_rate_limited_total.labels(
+                contract_id=_short_contract_id(contract.contract_id),
+                network=_network_label(),
+            ).inc()
+            logger.warning(
+                "Rate limit exceeded for contract %s — skipping event",
+                contract.contract_id,
+                extra={"contract_id": contract.contract_id},
+            )
+            # Return a dummy tuple to indicate the event was skipped
+            return (None, False)
 
-    # Update contract last activity timestamp if this event is newer
-    if not contract.last_event_at or timestamp > contract.last_event_at:
-        contract.last_event_at = timestamp
-        contract.save(update_fields=["last_event_at", "updated_at"])
-
-    obj, created = result
-    if created:
-        # Invalidate event count cache
-        invalidate_event_count_cache(contract.contract_id)
-
-        m = _get_metrics()
-        m.events_ingested_total.labels(
-            contract_id=_short_contract_id(contract.contract_id),
-            network=_network_label(),
-            event_type=event_type,
-        ).inc()
-        # Refresh the active contracts gauge whenever a new event arrives.
-        m.active_contracts_gauge.set(
-            TrackedContract.objects.filter(is_active=True).count()
+        ledger = _safe_int(_event_attr(event, "ledger", "ledger_sequence"), default=0)
+        event_index = _extract_event_index(event, fallback_event_index)
+        tx_hash = str(_event_attr(event, "tx_hash", "transaction_hash", default="") or "")
+        event_type = str(
+            _event_attr(event, "type", "event_type", default="unknown") or "unknown"
         )
 
-        # --- ABI-based XDR decoding (issue #58) ---
-        _try_decode_event(obj, contract, event_type, raw_xdr)
-    else:
-        # Event updated — invalidate decoded payload cache so next query re-decodes
-        invalidate_decoded_payload_cache(obj.pk)
+        # Check whitelist/blacklist filter before persisting
+        if not contract.should_ingest_event(event_type):
+            m = _get_metrics()
+            m.events_filtered_total.labels(
+                contract_id=_short_contract_id(contract.contract_id),
+                network=_network_label(),
+                filter_type=contract.event_filter_type,
+                event_type=event_type,
+            ).inc()
+            logger.debug(
+                "Event type '%s' filtered (%s) for contract %s — skipping",
+                event_type,
+                contract.event_filter_type,
+                contract.contract_id,
+                extra={"contract_id": contract.contract_id, "event_type": event_type},
+            )
+            return (None, False)
 
-    return result
+        payload = _event_attr(event, "value", "payload", default={}) or {}
+
+        if not validate_contract_payload_schema(
+            contract, payload, event_type, ledger=ledger
+        ):
+            m = _get_metrics()
+            m.events_validation_failures_total.labels(
+                contract_id=_short_contract_id(contract.contract_id),
+                network=_network_label(),
+            ).inc()
+            return (None, False)
+
+        payload_compression_ratio(payload)
+
+        raw_xdr = str(_event_attr(event, "xdr", "raw_xdr", default="") or "")
+        signature_status = resolve_signature_status(contract, event, payload)
+
+        timestamp = _event_attr(event, "timestamp", default=timezone.now())
+        if isinstance(timestamp, datetime) and timezone.is_naive(timestamp):
+            timestamp = timezone.make_aware(timestamp, dt_timezone.utc)
+        if not isinstance(timestamp, datetime):
+            timestamp = timezone.now()
+
+        result = ContractEvent.objects.update_or_create(
+            contract=contract,
+            ledger=ledger,
+            event_index=event_index,
+            defaults={
+                "tx_hash": tx_hash,
+                "event_type": event_type,
+                "payload": payload,
+                "timestamp": timestamp,
+                "raw_xdr": raw_xdr,
+                "signature_status": signature_status,
+            },
+        )
+
+        # Update contract last activity timestamp if this event is newer
+        if not contract.last_event_at or timestamp > contract.last_event_at:
+            contract.last_event_at = timestamp
+            contract.save(update_fields=["last_event_at", "updated_at"])
+
+        obj, created = result
+        if created:
+            # Invalidate event count cache
+            invalidate_event_count_cache(contract.contract_id)
+
+            m = _get_metrics()
+            m.events_ingested_total.labels(
+                contract_id=_short_contract_id(contract.contract_id),
+                network=_network_label(),
+                event_type=event_type,
+            ).inc()
+            # Refresh the active contracts gauge whenever a new event arrives.
+            m.active_contracts_gauge.set(
+                TrackedContract.objects.filter(is_active=True).count()
+            )
+
+            # --- ABI-based XDR decoding (issue #58) ---
+            _try_decode_event(obj, contract, event_type, raw_xdr)
+        else:
+            # Event updated — invalidate decoded payload cache so next query re-decodes
+            invalidate_decoded_payload_cache(obj.pk)
+
+        return result
 
 
 def _try_decode_event(
@@ -729,34 +747,42 @@ def validate_event_payload(
         (passed, version_used): passed is True if no schema exists or validation succeeded;
         version_used is the EventSchema.version used, or None if no schema.
     """
-    if payload is None or not isinstance(payload, dict):
-        return (True, None)
-    schema = (
-        EventSchema.objects.filter(
-            contract=contract,
-            event_type=event_type,
+    with tracer.start_as_current_span(
+        "ingest.validate_event_payload",
+        attributes={
+            "contract_id": contract.contract_id,
+            "event_type": event_type,
+            "ledger": ledger or 0,
+        },
+    ):
+        if payload is None or not isinstance(payload, dict):
+            return (True, None)
+        schema = (
+            EventSchema.objects.filter(
+                contract=contract,
+                event_type=event_type,
+            )
+            .order_by("-version")
+            .first()
         )
-        .order_by("-version")
-        .first()
-    )
-    if schema is None:
-        return (True, None)
-    try:
-        jsonschema.validate(instance=payload, schema=schema.json_schema)
-        return (True, schema.version)
-    except jsonschema.ValidationError:
-        logger.warning(
-            "Event payload schema validation failed for contract_id=%s event_type=%s ledger=%s",
-            contract.contract_id,
-            event_type,
-            ledger,
-            extra={
-                "contract_id": contract.contract_id,
-                "event_type": event_type,
-                "ledger": ledger,
-            },
-        )
-        return (False, schema.version)
+        if schema is None:
+            return (True, None)
+        try:
+            jsonschema.validate(instance=payload, schema=schema.json_schema)
+            return (True, schema.version)
+        except jsonschema.ValidationError:
+            logger.warning(
+                "Event payload schema validation failed for contract_id=%s event_type=%s ledger=%s",
+                contract.contract_id,
+                event_type,
+                ledger,
+                extra={
+                    "contract_id": contract.contract_id,
+                    "event_type": event_type,
+                    "ledger": ledger,
+                },
+            )
+            return (False, schema.version)
 
 
 @shared_task(
@@ -778,119 +804,234 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
     _start = time.monotonic()
     m = _get_metrics()
 
-    try:
-        webhook = WebhookSubscription.objects.get(
-            id=subscription_id,
-            is_active=True,
-            status=WebhookSubscription.STATUS_ACTIVE,
-        )
-    except WebhookSubscription.DoesNotExist:
-        logger.warning(
-            "Webhook subscription %s not found, inactive, or suspended — skipping",
-            subscription_id,
-            extra={"webhook_id": subscription_id},
-        )
-        return False
+    with tracer.start_as_current_span(
+        "webhook.dispatch",
+        attributes={"webhook_id": subscription_id, "event_id": event_id},
+    ):
+        try:
+            webhook = WebhookSubscription.objects.get(
+                id=subscription_id,
+                is_active=True,
+                status=WebhookSubscription.STATUS_ACTIVE,
+            )
+        except WebhookSubscription.DoesNotExist:
+            logger.warning(
+                "Webhook subscription %s not found, inactive, or suspended — skipping",
+                subscription_id,
+                extra={"webhook_id": subscription_id},
+            )
+            return False
 
-    try:
-        event = ContractEvent.objects.select_related("contract").get(id=event_id)
-    except ContractEvent.DoesNotExist:
-        logger.warning(
-            "ContractEvent %s not found — skipping dispatch for subscription %s",
-            event_id,
-            subscription_id,
-            extra={"event_id": event_id, "webhook_id": subscription_id},
-        )
-        return False
+        try:
+            event = ContractEvent.objects.select_related("contract").get(id=event_id)
+        except ContractEvent.DoesNotExist:
+            logger.warning(
+                "ContractEvent %s not found — skipping dispatch for subscription %s",
+                event_id,
+                subscription_id,
+                extra={"event_id": event_id, "webhook_id": subscription_id},
+            )
+            return False
 
-    # Deduplicate identical webhook deliveries to prevent floods
-    dedup_window = int(getattr(settings, "WEBHOOK_DEDUP_WINDOW_SECONDS", 300))
-    dedup_material = json.dumps(
-        {
-            "subscription_id": subscription_id,
+        # Deduplicate identical webhook deliveries to prevent floods
+        dedup_window = int(getattr(settings, "WEBHOOK_DEDUP_WINDOW_SECONDS", 300))
+        dedup_material = json.dumps(
+            {
+                "subscription_id": subscription_id,
+                "contract_id": event.contract.contract_id,
+                "event_type": event.event_type,
+                "ledger": event.ledger,
+                "event_index": event.event_index,
+                "payload": event.payload,
+            },
+            sort_keys=True,
+        )
+        dedup_hash = hashlib.sha256(dedup_material.encode("utf-8")).hexdigest()
+        dedup_key = f"soroscan:webhooks:dedup:{subscription_id}:{dedup_hash}"
+        if not cache.add(dedup_key, "1", timeout=dedup_window):
+            logger.info(
+                "Deduplicated webhook delivery for subscription=%s event=%s",
+                subscription_id,
+                event_id,
+                extra={"webhook_id": subscription_id, "event_id": event_id},
+            )
+            m.webhook_deduplicated_total.inc()
+            return True  # Consider deduplicated delivery as successful
+
+        event_data = {
             "contract_id": event.contract.contract_id,
             "event_type": event.event_type,
+            "payload": event.payload,
             "ledger": event.ledger,
             "event_index": event.event_index,
-            "payload": event.payload,
-        },
-        sort_keys=True,
-    )
-    dedup_hash = hashlib.sha256(dedup_material.encode("utf-8")).hexdigest()
-    dedup_key = f"soroscan:webhooks:dedup:{subscription_id}:{dedup_hash}"
-    if not cache.add(dedup_key, "1", timeout=dedup_window):
-        logger.info(
-            "Deduplicated webhook delivery for subscription=%s event=%s",
-            subscription_id,
-            event_id,
-            extra={"webhook_id": subscription_id, "event_id": event_id},
-        )
-        m.webhook_deduplicated_total.inc()
-        return True  # Consider deduplicated delivery as successful
+            "tx_hash": event.tx_hash,
+        }
+        payload_bytes = json.dumps(event_data, sort_keys=True).encode("utf-8")
+        payload_size = len(payload_bytes)
 
-    event_data = {
-        "contract_id": event.contract.contract_id,
-        "event_type": event.event_type,
-        "payload": event.payload,
-        "ledger": event.ledger,
-        "event_index": event.event_index,
-        "tx_hash": event.tx_hash,
-    }
-    payload_bytes = json.dumps(event_data, sort_keys=True).encode("utf-8")
-    payload_size = len(payload_bytes)
+        # Log warning if payload exceeds 512 KB
+        if payload_size > 512 * 1024:
+            logger.warning(
+                "Large webhook payload detected for contract %s: %d bytes (> 512 KB)",
+                event.contract.contract_id,
+                payload_size,
+                extra={
+                    "contract_id": event.contract.contract_id,
+                    "payload_bytes": payload_size,
+                },
+            )
 
-    # Log warning if payload exceeds 512 KB
-    if payload_size > 512 * 1024:
-        logger.warning(
-            "Large webhook payload detected for contract %s: %d bytes (> 512 KB)",
-            event.contract.contract_id,
-            payload_size,
-            extra={
-                "contract_id": event.contract.contract_id,
-                "payload_bytes": payload_size,
-            },
-        )
+        # Record histogram metric
+        webhook_payload_bytes.labels(
+            contract_id=event.contract.contract_id,
+        ).observe(payload_size)
 
-    # Record histogram metric
-    webhook_payload_bytes.labels(
-        contract_id=event.contract.contract_id,
-    ).observe(payload_size)
+        headers = {
+            "Content-Type": "application/json",
+            "X-SoroScan-Signature": _build_webhook_signature_header(webhook, payload_bytes),
+            "X-SoroScan-Timestamp": timezone.now().isoformat(),
+        }
+        inject_trace_headers(headers)
 
-    headers = {
-        "Content-Type": "application/json",
-        "X-SoroScan-Signature": _build_webhook_signature_header(webhook, payload_bytes),
-        "X-SoroScan-Timestamp": timezone.now().isoformat(),
-    }
+        attempt_number = self.request.retries + 1
+        attempt_logged = False
 
-    attempt_number = self.request.retries + 1
-    attempt_logged = False
+        try:
+            response = requests.post(
+                webhook.target_url,
+                data=payload_bytes,
+                headers=headers,
+                timeout=webhook.timeout_seconds,
+            )
+            status_code = response.status_code
+            elapsed_s = time.monotonic() - _start
+            latency_ms = int(elapsed_s * 1000)
 
-    try:
-        response = requests.post(
-            webhook.target_url,
-            data=payload_bytes,
-            headers=headers,
-            timeout=webhook.timeout_seconds,
-        )
-        status_code = response.status_code
-        elapsed_s = time.monotonic() - _start
-        latency_ms = int(elapsed_s * 1000)
+            if status_code == 429:
+                error_msg = "Rate limited by subscriber (429)"
+                _log_delivery_attempt(
+                    webhook,
+                    event,
+                    attempt_number,
+                    status_code,
+                    False,
+                    error_msg,
+                    payload_size,
+                    acknowledged=False,
+                    latency_ms=latency_ms,
+                    within_sla=False,
+                )
+                attempt_logged = True
+                _on_delivery_failure(
+                    webhook,
+                    self,
+                    event,
+                    event_data,
+                    status_code=status_code,
+                    error=error_msg,
+                )
+                m.webhook_deliveries_total.labels(status="rate_limited").inc()
 
-        if status_code == 429:
-            error_msg = "Rate limited by subscriber (429)"
+                countdown: int | None = None
+                retry_after = response.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        countdown = int(retry_after)
+                    except (ValueError, TypeError):
+                        pass
+
+                # Check if we've exhausted retries
+                if self.request.retries >= self.max_retries:
+                    # Final attempt — don't retry, let the HTTPError propagate
+                    raise requests.HTTPError("Rate limited (429)", response=response)
+
+                # If no Retry-After header, use webhook's backoff strategy
+                if countdown is None:
+                    if webhook.retry_backoff_strategy == WebhookSubscription.BACKOFF_EXPONENTIAL:
+                        _log_task_retry(
+                            "dispatch_webhook",
+                            attempt_number + 1,
+                            "RateLimitError",
+                            countdown=None,
+                        )
+                        raise self.retry(
+                            exc=requests.HTTPError("Rate limited (429)", response=response),
+                            retry_backoff=webhook.retry_backoff_seconds,
+                            retry_jitter=True,
+                        )
+                    countdown = calculate_backoff(
+                        self.request.retries,
+                        webhook.retry_backoff_strategy,
+                        webhook.retry_backoff_seconds,
+                    )
+
+                _log_task_retry(
+                    "dispatch_webhook",
+                    attempt_number + 1,
+                    "RateLimitError",
+                    countdown=countdown,
+                )
+                raise self.retry(
+                    exc=requests.HTTPError("Rate limited (429)", response=response),
+                    countdown=countdown,
+                )
+
+            acknowledged, ack_status = _validate_webhook_ack(response, webhook)
+            m.webhook_ack_total.labels(status=ack_status).inc()
+
+            within_sla = bool(
+                200 <= status_code < 300
+                and acknowledged
+                and elapsed_s <= webhook.delivery_sla_seconds
+            )
+            if 200 <= status_code < 300 and acknowledged:
+                m.webhook_sla_total.labels(
+                    outcome="within_sla" if within_sla else "breached"
+                ).inc()
+
+            success = 200 <= status_code < 300 and acknowledged
+            if success:
+                error_msg = ""
+            elif 200 <= status_code < 300:
+                error_msg = (
+                    f"Missing or invalid acknowledgement header "
+                    f"'{webhook.ack_header_name}: {webhook.ack_header_value}'"
+                )
+            else:
+                error_msg = f"HTTP {status_code}"
+
             _log_delivery_attempt(
                 webhook,
                 event,
                 attempt_number,
                 status_code,
-                False,
+                success,
                 error_msg,
                 payload_size,
-                acknowledged=False,
+                acknowledged=acknowledged,
                 latency_ms=latency_ms,
-                within_sla=False,
+                within_sla=within_sla,
             )
             attempt_logged = True
+
+            if success:
+                WebhookSubscription.objects.filter(pk=webhook.pk).update(
+                    failure_count=0,
+                    last_triggered=timezone.now(),
+                )
+                logger.info(
+                    "Webhook %s delivered successfully (attempt %s)",
+                    subscription_id,
+                    attempt_number,
+                    extra={"webhook_id": subscription_id},
+                )
+                m.webhook_deliveries_total.labels(status="success").inc()
+                m.webhook_delivery_duration_seconds.observe(elapsed_s)
+                m.task_duration_seconds.labels(task_name="dispatch_webhook").observe(
+                    elapsed_s
+                )
+                return True
+
             _on_delivery_failure(
                 webhook,
                 self,
@@ -899,267 +1040,156 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
                 status_code=status_code,
                 error=error_msg,
             )
-            m.webhook_deliveries_total.labels(status="rate_limited").inc()
+            m.webhook_deliveries_total.labels(status="failure").inc()
 
-            countdown: int | None = None
-            retry_after = response.headers.get("Retry-After")
-            if retry_after:
-                try:
-                    countdown = int(retry_after)
-                except (ValueError, TypeError):
-                    pass
-
-            # Check if we've exhausted retries
-            if self.request.retries >= self.max_retries:
-                # Final attempt — don't retry, let the HTTPError propagate
-                raise requests.HTTPError("Rate limited (429)", response=response)
-
-            # If no Retry-After header, use webhook's backoff strategy
-            if countdown is None:
-                if webhook.retry_backoff_strategy == WebhookSubscription.BACKOFF_EXPONENTIAL:
-                    _log_task_retry(
-                        "dispatch_webhook",
-                        attempt_number + 1,
-                        "RateLimitError",
-                        countdown=None,
-                    )
-                    raise self.retry(
-                        exc=requests.HTTPError("Rate limited (429)", response=response),
-                        retry_backoff=webhook.retry_backoff_seconds,
-                        retry_jitter=True,
-                    )
+            if 200 <= status_code < 300 and not acknowledged:
+                nack_exc = requests.HTTPError(error_msg, response=response)
+                if self.request.retries >= self.max_retries:
+                    raise nack_exc
                 countdown = calculate_backoff(
                     self.request.retries,
                     webhook.retry_backoff_strategy,
                     webhook.retry_backoff_seconds,
                 )
+                raise self.retry(exc=nack_exc, countdown=countdown)
 
-            _log_task_retry(
-                "dispatch_webhook",
-                attempt_number + 1,
-                "RateLimitError",
-                countdown=countdown,
-            )
-            raise self.retry(
-                exc=requests.HTTPError("Rate limited (429)", response=response),
-                countdown=countdown,
-            )
+            response.raise_for_status()
+        except requests.exceptions.Timeout:
+            elapsed_s = time.monotonic() - _start
+            latency_ms = int(elapsed_s * 1000)
+            # Log timeout as 504 Gateway Timeout
+            if not attempt_logged:
+                _log_delivery_attempt(
+                    webhook,
+                    event,
+                    attempt_number,
+                    504,
+                    False,
+                    "Timeout exceeded",
+                    payload_size,
+                    acknowledged=False,
+                    latency_ms=latency_ms,
+                    within_sla=False,
+                )
+                attempt_logged = True
+                _on_delivery_failure(
+                    webhook,
+                    self,
+                    event,
+                    event_data,
+                    status_code=504,
+                    error="Timeout exceeded",
+                )
 
-        acknowledged, ack_status = _validate_webhook_ack(response, webhook)
-        m.webhook_ack_total.labels(status=ack_status).inc()
-
-        within_sla = bool(
-            200 <= status_code < 300
-            and acknowledged
-            and elapsed_s <= webhook.delivery_sla_seconds
-        )
-        if 200 <= status_code < 300 and acknowledged:
-            m.webhook_sla_total.labels(
-                outcome="within_sla" if within_sla else "breached"
-            ).inc()
-
-        success = 200 <= status_code < 300 and acknowledged
-        if success:
-            error_msg = ""
-        elif 200 <= status_code < 300:
-            error_msg = (
-                f"Missing or invalid acknowledgement header "
-                f"'{webhook.ack_header_name}: {webhook.ack_header_value}'"
-            )
-        else:
-            error_msg = f"HTTP {status_code}"
-
-        _log_delivery_attempt(
-            webhook,
-            event,
-            attempt_number,
-            status_code,
-            success,
-            error_msg,
-            payload_size,
-            acknowledged=acknowledged,
-            latency_ms=latency_ms,
-            within_sla=within_sla,
-        )
-        attempt_logged = True
-
-        if success:
-            WebhookSubscription.objects.filter(pk=webhook.pk).update(
-                failure_count=0,
-                last_triggered=timezone.now(),
-            )
-            logger.info(
-                "Webhook %s delivered successfully (attempt %s)",
+            logger.warning(
+                "Webhook %s dispatch timed out (attempt %s/%s) after %d seconds",
                 subscription_id,
                 attempt_number,
+                self.max_retries + 1,
+                webhook.timeout_seconds,
                 extra={"webhook_id": subscription_id},
             )
-            m.webhook_deliveries_total.labels(status="success").inc()
-            m.webhook_delivery_duration_seconds.observe(elapsed_s)
-            m.task_duration_seconds.labels(task_name="dispatch_webhook").observe(
-                elapsed_s
-            )
-            return True
 
-        _on_delivery_failure(
-            webhook,
-            self,
-            event,
-            event_data,
-            status_code=status_code,
-            error=error_msg,
-        )
-        m.webhook_deliveries_total.labels(status="failure").inc()
-
-        if 200 <= status_code < 300 and not acknowledged:
-            nack_exc = requests.HTTPError(error_msg, response=response)
+            # Check if we've exhausted retries
             if self.request.retries >= self.max_retries:
-                raise nack_exc
+                # Final attempt — don't retry, let the exception propagate
+                raise
+
+            # Retry with backoff based on webhook's strategy
+            if webhook.retry_backoff_strategy == WebhookSubscription.BACKOFF_EXPONENTIAL:
+                _log_task_retry(
+                    "dispatch_webhook",
+                    attempt_number + 1,
+                    "TimeoutError",
+                    countdown=None,
+                )
+                raise self.retry(retry_backoff=webhook.retry_backoff_seconds, retry_jitter=True)
+
             countdown = calculate_backoff(
                 self.request.retries,
                 webhook.retry_backoff_strategy,
                 webhook.retry_backoff_seconds,
             )
-            raise self.retry(exc=nack_exc, countdown=countdown)
-
-        response.raise_for_status()
-
-    except requests.exceptions.Timeout:
-        elapsed_s = time.monotonic() - _start
-        latency_ms = int(elapsed_s * 1000)
-        # Log timeout as 504 Gateway Timeout
-        if not attempt_logged:
-            _log_delivery_attempt(
-                webhook,
-                event,
-                attempt_number,
-                504,
-                False,
-                "Timeout exceeded",
-                payload_size,
-                acknowledged=False,
-                latency_ms=latency_ms,
-                within_sla=False,
-            )
-            attempt_logged = True
-            _on_delivery_failure(
-                webhook,
-                self,
-                event,
-                event_data,
-                status_code=504,
-                error="Timeout exceeded",
-            )
-
-        logger.warning(
-            "Webhook %s dispatch timed out (attempt %s/%s) after %d seconds",
-            subscription_id,
-            attempt_number,
-            self.max_retries + 1,
-            webhook.timeout_seconds,
-            extra={"webhook_id": subscription_id},
-        )
-
-        # Check if we've exhausted retries
-        if self.request.retries >= self.max_retries:
-            # Final attempt — don't retry, let the exception propagate
-            raise
-
-        # Retry with backoff based on webhook's strategy
-        if webhook.retry_backoff_strategy == WebhookSubscription.BACKOFF_EXPONENTIAL:
             _log_task_retry(
                 "dispatch_webhook",
                 attempt_number + 1,
                 "TimeoutError",
-                countdown=None,
+                countdown=countdown,
             )
-            raise self.retry(retry_backoff=webhook.retry_backoff_seconds, retry_jitter=True)
+            raise self.retry(countdown=countdown)
 
-        countdown = calculate_backoff(
-            self.request.retries,
-            webhook.retry_backoff_strategy,
-            webhook.retry_backoff_seconds,
-        )
-        _log_task_retry(
-            "dispatch_webhook",
-            attempt_number + 1,
-            "TimeoutError",
-            countdown=countdown,
-        )
-        raise self.retry(countdown=countdown)
+        except requests.RequestException as exc:
+            elapsed_s = time.monotonic() - _start
+            latency_ms = int(elapsed_s * 1000)
+            if not attempt_logged:
+                _log_delivery_attempt(
+                    webhook,
+                    event,
+                    attempt_number,
+                    None,
+                    False,
+                    str(exc),
+                    payload_size,
+                    acknowledged=False,
+                    latency_ms=latency_ms,
+                    within_sla=False,
+                )
+                _on_delivery_failure(
+                    webhook,
+                    self,
+                    event,
+                    event_data,
+                    status_code=None,
+                    error=str(exc),
+                )
+            m.webhook_deliveries_total.labels(status="failure").inc()
+            m.webhook_delivery_duration_seconds.observe(elapsed_s)
+            m.task_duration_seconds.labels(task_name="dispatch_webhook").observe(
+                elapsed_s
+            )
 
-    except requests.RequestException as exc:
-        elapsed_s = time.monotonic() - _start
-        latency_ms = int(elapsed_s * 1000)
-        if not attempt_logged:
-            _log_delivery_attempt(
-                webhook,
-                event,
+            logger.warning(
+                "Webhook %s dispatch failed (attempt %s/%s): %s",
+                subscription_id,
                 attempt_number,
-                None,
-                False,
-                str(exc),
-                payload_size,
-                acknowledged=False,
-                latency_ms=latency_ms,
-                within_sla=False,
+                self.max_retries + 1,
+                exc,
+                extra={"webhook_id": subscription_id},
             )
-            _on_delivery_failure(
-                webhook,
-                self,
-                event,
-                event_data,
-                status_code=None,
-                error=str(exc),
+
+            # Check if we've exhausted retries
+            if self.request.retries >= self.max_retries:
+                # Final attempt — don't retry, let the exception propagate
+                raise
+
+            # Retry with backoff based on webhook's strategy
+            if webhook.retry_backoff_strategy == WebhookSubscription.BACKOFF_EXPONENTIAL:
+                _log_task_retry(
+                    "dispatch_webhook",
+                    attempt_number + 1,
+                    type(exc).__name__,
+                    countdown=None,
+                )
+                raise self.retry(exc=exc, retry_backoff=webhook.retry_backoff_seconds, retry_jitter=True)
+
+            countdown = calculate_backoff(
+                self.request.retries,
+                webhook.retry_backoff_strategy,
+                webhook.retry_backoff_seconds,
             )
-        m.webhook_deliveries_total.labels(status="failure").inc()
-        m.webhook_delivery_duration_seconds.observe(elapsed_s)
-        m.task_duration_seconds.labels(task_name="dispatch_webhook").observe(
-            elapsed_s
-        )
-
-        logger.warning(
-            "Webhook %s dispatch failed (attempt %s/%s): %s",
-            subscription_id,
-            attempt_number,
-            self.max_retries + 1,
-            exc,
-            extra={"webhook_id": subscription_id},
-        )
-
-        # Check if we've exhausted retries
-        if self.request.retries >= self.max_retries:
-            # Final attempt — don't retry, let the exception propagate
-            raise
-
-        # Retry with backoff based on webhook's strategy
-        if webhook.retry_backoff_strategy == WebhookSubscription.BACKOFF_EXPONENTIAL:
             _log_task_retry(
                 "dispatch_webhook",
                 attempt_number + 1,
                 type(exc).__name__,
-                countdown=None,
+                countdown=countdown,
             )
-            raise self.retry(exc=exc, retry_backoff=webhook.retry_backoff_seconds, retry_jitter=True)
+            raise self.retry(exc=exc, countdown=countdown)
 
-        countdown = calculate_backoff(
-            self.request.retries,
-            webhook.retry_backoff_strategy,
-            webhook.retry_backoff_seconds,
+        m.webhook_delivery_duration_seconds.observe(time.monotonic() - _start)
+        m.task_duration_seconds.labels(task_name="dispatch_webhook").observe(
+            time.monotonic() - _start
         )
-        _log_task_retry(
-            "dispatch_webhook",
-            attempt_number + 1,
-            type(exc).__name__,
-            countdown=countdown,
-        )
-        raise self.retry(exc=exc, countdown=countdown)
-
-    m.webhook_delivery_duration_seconds.observe(time.monotonic() - _start)
-    m.task_duration_seconds.labels(task_name="dispatch_webhook").observe(
-        time.monotonic() - _start
-    )
-    return False
+        return False
 
 
 @shared_task(name="ingest.tasks.ping_webhook", bind=True)
@@ -1427,6 +1457,9 @@ def _enqueue_webhook_dead_letter(
         status_code=status_code,
         error=error[:2000],
         retries_exhausted=retries_exhausted,
+    )
+    _get_metrics().webhook_dead_letter_depth.set(
+        WebhookDeadLetter.objects.filter(resolved=False).count()
     )
 
 

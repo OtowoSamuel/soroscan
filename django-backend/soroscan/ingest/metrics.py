@@ -24,6 +24,7 @@ __all__ = [
     "webhook_sla_total",
     "webhook_escalations_total",
     "webhook_deduplicated_total",
+    "webhook_dead_letter_depth",
     "alert_rules_evaluated_total",
     "alert_deduplicated_total",
     "remediation_rules_evaluated_total",
@@ -39,10 +40,11 @@ __all__ = [
     "ledger_gaps_total",
     "missing_events_total",
     "event_ingestion_rate_gauge",
+    "event_payload_compression_ratio",
 ]
 
 
-def _get_or_create(metric_cls, name, documentation, labelnames=()):
+def _get_or_create(metric_cls, name, documentation, labelnames=(), **metric_kwargs):
     """
     Return an existing collector from REGISTRY if one with *name* is already
     registered, otherwise create and register a new one.
@@ -66,8 +68,8 @@ def _get_or_create(metric_cls, name, documentation, labelnames=()):
 
     # Not found — safe to create (which auto-registers).
     if labelnames:
-        return metric_cls(name, documentation, labelnames)
-    return metric_cls(name, documentation)
+        return metric_cls(name, documentation, labelnames, **metric_kwargs)
+    return metric_cls(name, documentation, **metric_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +240,12 @@ webhook_payload_bytes = _get_or_create(
     ["contract_id"],
 )
 
+webhook_dead_letter_depth = _get_or_create(
+    Gauge,
+    "soroscan_webhook_dead_letter_depth",
+    "Current number of unresolved webhook dead-letter entries",
+)
+
 cache_hits_total = _get_or_create(
     Counter,
     "soroscan_cache_hits_total",
@@ -277,4 +285,11 @@ event_ingestion_rate_gauge = _get_or_create(
     Gauge,
     "soroscan_event_ingestion_rate",
     "Current event ingestion rate in events per second",
+)
+
+event_payload_compression_ratio = _get_or_create(
+    Histogram,
+    "soroscan_event_payload_compression_ratio",
+    "Observed compressed-to-raw size ratio for stored event payloads",
+    buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.25, 1.5),
 )

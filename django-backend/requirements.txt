@@ -95,6 +95,8 @@ sqlparse==0.5.5
 stellar-sdk==13.2.0
 strawberry-graphql==0.289.0
 strawberry-graphql-django==0.74.1
+opentelemetry-api==1.41.1
+opentelemetry-sdk==1.41.1
 Twisted==25.5.0
 txaio==25.12.2
 typing-inspection==0.4.2

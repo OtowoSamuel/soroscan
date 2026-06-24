@@ -13,6 +13,7 @@ from django.core.cache import cache
 # Imported at module level so patch('soroscan.ingest.cache_utils.TrackedContract…') works.
 # The lazy import inside get_cached_contract is replaced by this top-level reference.
 from .models import TrackedContract
+from .telemetry import tracer
 
 
 def query_cache_ttl() -> int:
@@ -52,17 +53,21 @@ def contract_cache_key(contract_id: str) -> str:
 
 def get_cached_contract(contract_id: str) -> Any:
     """Get a TrackedContract instance from cache, or load from DB and cache it."""
-    key = contract_cache_key(contract_id)
-    contract = cache.get(key)
-    if contract is not None:
-        return contract
+    with tracer.start_as_current_span(
+        "ingest.contract_lookup",
+        attributes={"contract_id": contract_id},
+    ):
+        key = contract_cache_key(contract_id)
+        contract = cache.get(key)
+        if contract is not None:
+            return contract
 
-    try:
-        contract = TrackedContract.objects.get(contract_id=contract_id)
-        cache.set(key, contract, timeout=3600)  # 1 hour TTL
-        return contract
-    except TrackedContract.DoesNotExist:
-        return None
+        try:
+            contract = TrackedContract.objects.get(contract_id=contract_id)
+            cache.set(key, contract, timeout=3600)  # 1 hour TTL
+            return contract
+        except TrackedContract.DoesNotExist:
+            return None
 
 
 def invalidate_cached_contract(contract_id: str) -> None:
