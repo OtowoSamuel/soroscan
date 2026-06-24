@@ -11,7 +11,7 @@ from django.core.cache import cache
 from django.test import override_settings
 from rest_framework.settings import api_settings
 from rest_framework.test import APIRequestFactory
-from rest_framework import status
+# from rest_framework import status
 from unittest.mock import MagicMock
 
 from django.contrib.auth.models import User
