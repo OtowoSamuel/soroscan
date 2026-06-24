@@ -898,18 +898,14 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
 
         attempt_number = self.request.retries + 1
         attempt_logged = False
-    headers = {
-        "Content-Type": "application/json",
-        "X-SoroScan-Signature": _build_webhook_signature_header(webhook, payload_bytes),
-        "X-SoroScan-Timestamp": timezone.now().isoformat(),
-    }
-    try:
-        headers["X-Signature"] = build_x_signature_header(payload_bytes)
-    except ValueError:
-        logger.warning(
-            "Skipping Ed25519 webhook signature; WEBHOOK_ED25519_SIGNING_SEED not set",
-            extra={"webhook_id": webhook.id},
-        )
+
+        try:
+            headers["X-Signature"] = build_x_signature_header(payload_bytes)
+        except ValueError:
+            logger.warning(
+                "Skipping Ed25519 webhook signature; WEBHOOK_ED25519_SIGNING_SEED not set",
+                extra={"webhook_id": webhook.id},
+            )
 
         try:
             response = requests.post(
