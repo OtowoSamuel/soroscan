@@ -21,7 +21,9 @@ import type {
   GetEventsResponse,
   GetContractsParams,
   GetContractsResponse,
+  ContractEvent,
 } from "./index.js";
+import type { ZodType } from "zod";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EventQueryBuilder
@@ -145,6 +147,22 @@ export class EventQueryBuilder {
   /** Execute the query and return the paginated response. */
   execute(): Promise<GetEventsResponse> {
     return this.#client.getEvents(this.build());
+  }
+
+  /**
+   * Execute the query with Zod payload validation (SC-1419).
+   * Validates each event's payload against the provided schema when given.
+   */
+  async query<T = unknown>(
+    params: GetEventsParams,
+    schema?: ZodType<T>
+  ): Promise<ContractEvent<T>[]> {
+    const response = await this.#client.getEvents(params);
+    if (!schema) return response.items as ContractEvent<T>[];
+    return response.items.map((event) => ({
+      ...event,
+      value: schema.parse(event.value),
+    })) as ContractEvent<T>[];
   }
 }
 

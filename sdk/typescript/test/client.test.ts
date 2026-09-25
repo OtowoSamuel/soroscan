@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SoroScanClient, SoroScanError } from "../src/client.js";
+import { EventQueryBuilder } from "../src/builder.js";
 import type {
   GetEventsResponse,
   GetContractsResponse,
@@ -11,7 +12,9 @@ import type {
   GetLedgersResponse,
   Ledger,
   Transaction,
+  ContractEvent,
 } from "../src/types.js";
+import { z } from "zod";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -454,5 +457,57 @@ describe("Error handling", () => {
       vi.fn().mockRejectedValue(new TypeError("Failed to fetch"))
     );
     await expect(makeClient().getEvents()).rejects.toThrow("Failed to fetch");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EventQueryBuilder.query() with Zod validation (#1419)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("EventQueryBuilder.query()", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("returns events without schema validation", async () => {
+    const eventsResponse: GetEventsResponse = {
+      items: [{ ...mockEvent, value: { amount: "100" } }],
+      pageInfo: mockPageInfo,
+      totalCount: 1,
+    };
+    mockFetch(eventsResponse);
+    const client = makeClient();
+    const builder = new EventQueryBuilder(client);
+    const result = await builder.query({ contractId: "CCAAA" });
+    expect(result).toHaveLength(1);
+    expect(result[0].value).toEqual({ amount: "100" });
+  });
+
+  it("validates payload against Zod schema when provided", async () => {
+    const schema = z.object({ amount: z.string() });
+    const eventsResponse: GetEventsResponse = {
+      items: [{ ...mockEvent, value: { amount: "100" } }],
+      pageInfo: mockPageInfo,
+      totalCount: 1,
+    };
+    mockFetch(eventsResponse);
+    const client = makeClient();
+    const builder = new EventQueryBuilder(client);
+    const result = await builder.query({ contractId: "CCAAA" }, schema);
+    expect(result[0].value).toEqual({ amount: "100" });
+    expect(result[0]).toHaveProperty("value");
+  });
+
+  it("throws when payload does not match schema", async () => {
+    const schema = z.object({ amount: z.number() });
+    const eventsResponse: GetEventsResponse = {
+      items: [{ ...mockEvent, value: { amount: "not-a-number" } }],
+      pageInfo: mockPageInfo,
+      totalCount: 1,
+    };
+    mockFetch(eventsResponse);
+    const client = makeClient();
+    const builder = new EventQueryBuilder(client);
+    await expect(
+      builder.query({ contractId: "CCAAA" }, schema)
+    ).rejects.toThrow();
   });
 });
