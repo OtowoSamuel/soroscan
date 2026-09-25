@@ -78,7 +78,7 @@ export interface ContractEventTopic {
   value: string;
 }
 
-export interface ContractEvent {
+export interface ContractEvent<T = unknown> {
   id: string;
   ledger: number;
   ledgerClosedAt: ISODateString;
@@ -86,7 +86,7 @@ export interface ContractEvent {
   contractId: ContractId;
   type: EventType;
   topics: ContractEventTopic[];
-  value: unknown;
+  value: T;
   inSuccessfulContractCall: boolean;
   pagingToken: string;
 }

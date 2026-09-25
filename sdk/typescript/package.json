@@ -62,6 +62,9 @@
     "typecheck": "tsc --noEmit --strict --strictNullChecks",
     "prepublishOnly": "npm run build && npm test"
   },
+  "dependencies": {
+    "zod": "^3.23.0"
+  },
   "devDependencies": {
     "@apollo/client": "^3.14.0",
     "@testing-library/react": "^16.3.0",
