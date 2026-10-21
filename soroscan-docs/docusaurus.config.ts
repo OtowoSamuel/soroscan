@@ -13,8 +13,8 @@ const config: Config = {
   organizationName: 'SoroScan',
   projectName: 'soroscan',
 
-  onBrokenLinks: 'warn',
-  onBrokenMarkdownLinks: 'warn',
+  onBrokenLinks: 'throw',
+  onBrokenMarkdownLinks: 'throw',
 
   i18n: {
     defaultLocale: 'en',

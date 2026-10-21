@@ -49,6 +49,11 @@ jobs:
       - name: Build frontend
         run: pnpm run build
 
+      - name: Run axe accessibility checks
+        run: pnpm run test:a11y
+        env:
+          CI: true
+
       - name: Run Playwright E2E tests
         run: pnpm run test:e2e
         env:

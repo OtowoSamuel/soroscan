@@ -1,0 +1,44 @@
+name: Admin CI
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "admin/**"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - ".github/workflows/admin-ci.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "admin/**"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - ".github/workflows/admin-ci.yml"
+
+jobs:
+  admin:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run lint
+        run: pnpm --dir admin run lint
+
+      - name: Run tests
+        run: pnpm --dir admin run test
+
+      - name: Build admin dashboard
+        run: pnpm --dir admin run build

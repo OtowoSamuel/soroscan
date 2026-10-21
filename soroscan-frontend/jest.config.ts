@@ -33,7 +33,7 @@ const config: Config = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'text-summary', 'lcov', 'json', 'html'],
 
-  // Preserved the 70% threshold mandated by the issue
+  // Keep Jest at its current 40/30/35/40 baseline; Codecov tracks 70% as a longer-term target.
   coverageThreshold: {
     global: {
       lines: 40,
