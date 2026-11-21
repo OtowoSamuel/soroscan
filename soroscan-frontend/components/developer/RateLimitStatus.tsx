@@ -117,7 +117,7 @@ export function RateLimitStatus({
         plan,
       });
       setLastRefreshed(new Date());
-    } catch (err) {
+    } catch {
       setError("Unable to fetch rate limits — showing cached data.");
     } finally {
       setLoading(false);

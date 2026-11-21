@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { usePathname, useRouter } from "next/navigation"
+import { usePathname } from "next/navigation"
 import { locales, defaultLocale, type AppLocale } from "@/lib/locales"
 import { hardNavigate } from "@/lib/navigation"
 
@@ -26,7 +26,6 @@ export function LanguageSelector() {
   const t = useTranslations("Language")
   const locale = useLocale() as AppLocale
   const pathname = usePathname()
-  const router = useRouter()
 
   return (
     <div className="flex items-center gap-1.5">

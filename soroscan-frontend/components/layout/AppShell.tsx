@@ -14,14 +14,11 @@ import {
   Settings,
   Shield,
   Building2,
-  Sun,
-  Moon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Drawer } from "@/components/ui/drawer";
 import { HamburgerToggle } from "@/components/ui/hamburger-toggle";
 import { OrganizationSwitcher } from "@/components/organization/OrganizationSwitcher";
-import { useTheme } from "@/hooks/useTheme";
 
 const navItems = [
   { href: "/dashboard", label: "Events", icon: LayoutDashboard },
@@ -115,7 +112,6 @@ function SidebarNav({
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
-  const { theme, toggleTheme, mounted } = useTheme();
 
   React.useEffect(() => {
     setSidebarOpen(false);

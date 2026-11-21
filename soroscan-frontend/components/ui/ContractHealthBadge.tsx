@@ -21,13 +21,11 @@ import {
   AlertTriangle, 
   Pause, 
   XCircle, 
-  Activity,
-  Zap
+  Activity
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { 
-  useStatusAnimation, 
-  ANIMATION_PRESETS,
+  useStatusAnimation,
   type AnimationType,
   type AnimationContext 
 } from "@/lib/status-animations";
@@ -235,6 +233,14 @@ const ContractHealthBadge = React.forwardRef<HTMLSpanElement, ContractHealthBadg
       "normal",
       animationContext
     );
+    const setBadgeRef = React.useCallback((node: HTMLSpanElement | null) => {
+      elementRef.current = node;
+      if (typeof ref === "function") {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    }, [elementRef, ref]);
 
     // Tooltip content setup
     const tooltipState = useDegradedStatusTooltip(
@@ -284,7 +290,7 @@ const ContractHealthBadge = React.forwardRef<HTMLSpanElement, ContractHealthBadg
 
     const badgeContent = (
       <span
-        ref={elementRef}
+        ref={setBadgeRef}
         role="status"
         aria-label={accessibleLabel}
         tabIndex={hasTooltip ? 0 : undefined}

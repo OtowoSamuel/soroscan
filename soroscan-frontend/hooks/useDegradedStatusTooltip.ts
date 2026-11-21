@@ -15,7 +15,6 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   DegradationContext,
   DegradationType,
-  DegradationSeverity,
   DEGRADATION_CONTENT_TEMPLATES,
   generateDegradedTooltipContent,
   generateAccessibleTooltipContent,
@@ -75,6 +74,11 @@ export function useDegradedStatusTooltip(
 
   const [isLoading, setIsLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [currentContext, setCurrentContext] = useState(degradationContext);
+
+  useEffect(() => {
+    setCurrentContext(degradationContext);
+  }, [degradationContext]);
 
   // Generate tooltip content
   const content = useMemo(() => {
@@ -82,21 +86,21 @@ export function useDegradedStatusTooltip(
       return customContent;
     }
 
-    if (!degradationContext) {
+    if (!currentContext) {
       return '';
     }
 
     try {
       if (accessibleFormat) {
-        return generateAccessibleTooltipContent(degradationContext);
+        return generateAccessibleTooltipContent(currentContext);
       }
 
-      return formatTooltipForContext(degradationContext, uiContext);
+      return formatTooltipForContext(currentContext, uiContext);
     } catch (error) {
       console.warn('Error generating tooltip content:', error);
       return 'Contract experiencing performance issues';
     }
-  }, [degradationContext, uiContext, accessibleFormat, customContent]);
+  }, [currentContext, uiContext, accessibleFormat, customContent]);
 
   // Validate content if enabled
   const validation = useMemo(() => {
@@ -119,7 +123,8 @@ export function useDegradedStatusTooltip(
   }, []);
 
   // Update degradation context
-  const updateContext = useCallback((newContext: DegradationContext) => {
+  const updateContext = useCallback((context: DegradationContext) => {
+    setCurrentContext(context);
     setIsLoading(true);
     setLastUpdated(new Date());
     

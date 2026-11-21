@@ -230,7 +230,6 @@ export function useStatusAnimation(
   intensity: AnimationIntensity = "normal",
   context?: AnimationContext
 ) {
-  const [isVisible, setIsVisible] = React.useState(true);
   const [isPaused, setIsPaused] = React.useState(false);
   const elementRef = React.useRef<HTMLElement>(null);
 
@@ -275,7 +274,7 @@ export function useStatusAnimation(
     animationClasses,
     animationStyles,
     badgeClasses: STATUS_BADGE_STYLES[type],
-    isVisible,
+    isVisible: true,
     isPaused,
     pauseAnimation: () => setIsPaused(true),
     resumeAnimation: () => setIsPaused(false),
